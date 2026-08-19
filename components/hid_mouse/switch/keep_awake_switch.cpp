@@ -1,5 +1,6 @@
 #include "keep_awake_switch.h"
 #include "esphome/core/log.h"
+#include <cinttypes>
 
 namespace esphome {
 namespace hid_mouse {
@@ -8,8 +9,8 @@ static const char *const TAG = "hid_mouse.switch";
 
 void KeepAwakeSwitch::dump_config() {
   LOG_SWITCH("", "HID Mouse Keep Awake Switch", this);
-  ESP_LOGCONFIG(TAG, "  Interval: %dms", this->interval_);
-  ESP_LOGCONFIG(TAG, "  Jitter: %dms", this->jitter_);
+  ESP_LOGCONFIG(TAG, "  Interval: %" PRIu32 "ms", this->interval_);
+  ESP_LOGCONFIG(TAG, "  Jitter: %" PRIu32 "ms", this->jitter_);
 }
 
 void KeepAwakeSwitch::write_state(bool state) {

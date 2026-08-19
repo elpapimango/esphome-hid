@@ -3,6 +3,8 @@ esphome:
   friendly_name: Test Composite Telephony
   platformio_options:
     board_build.flash_mode: dio
+    build_flags:
+      - -DCFG_TUD_HID=1
 
 esp32:
   board: esp32-s3-devkitc-1

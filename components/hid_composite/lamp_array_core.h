@@ -1,0 +1,530 @@
+#pragma once
+
+// HID LampArray protocol core (Lighting And Illumination page 0x59).
+//
+// SOURCE OF TRUTH: components/hid_lamp_array/lamp_array_core.h
+// A byte-identical copy lives in components/hid_composite/lamp_array_core.h.
+// ESPHome's external_components copies only the requested component directory,
+// so the file is duplicated rather than shared. Change one, copy to the other.
+//
+// Derived from Microsoft's MIT-licensed reference implementations:
+//   microsoft/ArduinoHidForWindows     src/LampArrayReportDescriptor.h, src/Microsoft_HidLampArray.cpp
+//   microsoft/RP2040MacropadHidSample  src/Lighting/LampArray.c, src/Lighting/LampArrayHidStructs.h
+// See NOTICE.md.
+
+#include <atomic>
+#include <cstdint>
+#include <cstring>
+#include <vector>
+
+#include "esphome/core/helpers.h"
+
+namespace esphome {
+namespace lamp_array_core {
+
+// Report IDs are expressed as offsets from a configurable base, so the block
+// can be appended to a composite descriptor that already uses low report IDs.
+enum LampArrayReportOffset : uint8_t {
+  REPORT_OFFSET_ARRAY_ATTRIBUTES = 0,
+  REPORT_OFFSET_ATTRIBUTES_REQUEST = 1,
+  REPORT_OFFSET_ATTRIBUTES_RESPONSE = 2,
+  REPORT_OFFSET_MULTI_UPDATE = 3,
+  REPORT_OFFSET_RANGE_UPDATE = 4,
+  REPORT_OFFSET_CONTROL = 5,
+  LAMP_ARRAY_REPORT_COUNT = 6,
+};
+
+// LampArrayKind, HID Usage Tables 1.4.
+enum LampArrayKind : uint32_t {
+  LAMP_ARRAY_KIND_KEYBOARD = 1,
+  LAMP_ARRAY_KIND_MOUSE = 2,
+  LAMP_ARRAY_KIND_GAME_CONTROLLER = 3,
+  LAMP_ARRAY_KIND_PERIPHERAL = 4,
+  LAMP_ARRAY_KIND_SCENE = 5,
+  LAMP_ARRAY_KIND_NOTIFICATION = 6,
+  LAMP_ARRAY_KIND_CHASSIS = 7,
+  LAMP_ARRAY_KIND_WEARABLE = 8,
+  LAMP_ARRAY_KIND_FURNITURE = 9,
+  LAMP_ARRAY_KIND_ART = 10,
+};
+
+// LampPurposes bitfield.
+enum LampPurpose : uint32_t {
+  LAMP_PURPOSE_CONTROL = 0x01,
+  LAMP_PURPOSE_ACCENT = 0x02,
+  LAMP_PURPOSE_BRANDING = 0x04,
+  LAMP_PURPOSE_STATUS = 0x08,
+  LAMP_PURPOSE_ILLUMINATION = 0x10,
+  LAMP_PURPOSE_PRESENTATION = 0x20,
+};
+
+// Set by the host on the last report of an update batch.
+static const uint8_t LAMP_UPDATE_FLAG_UPDATE_COMPLETE = 0x01;
+
+// Most lamps the host may address in one multi-update report.
+static const uint8_t LAMP_MULTI_UPDATE_MAX = 8;
+
+// Wire structs.
+//
+// TinyUSB passes the report ID as its own argument to tud_hid_get_report_cb()
+// and tud_hid_set_report_cb(), and the buffer holds only the payload. So unlike
+// the structs in Microsoft's Arduino library, these carry no ReportId member.
+struct __attribute__((packed)) LampColor {
+  uint8_t red;
+  uint8_t green;
+  uint8_t blue;
+  uint8_t intensity;
+};
+
+struct __attribute__((packed)) LampArrayAttributesReport {
+  uint16_t lamp_count;
+  uint32_t bounding_box_width_um;
+  uint32_t bounding_box_height_um;
+  uint32_t bounding_box_depth_um;
+  uint32_t lamp_array_kind;
+  uint32_t min_update_interval_us;
+};
+
+struct __attribute__((packed)) LampAttributesRequestReport {
+  uint16_t lamp_id;
+};
+
+struct __attribute__((packed)) LampAttributesResponseReport {
+  uint16_t lamp_id;
+  uint32_t position_x_um;
+  uint32_t position_y_um;
+  uint32_t position_z_um;
+  uint32_t update_latency_us;
+  uint32_t lamp_purposes;
+  uint8_t red_level_count;
+  uint8_t green_level_count;
+  uint8_t blue_level_count;
+  uint8_t intensity_level_count;
+  uint8_t is_programmable;
+  uint8_t input_binding;
+};
+
+struct __attribute__((packed)) LampMultiUpdateReport {
+  uint8_t lamp_count;
+  uint8_t lamp_update_flags;
+  uint16_t lamp_ids[LAMP_MULTI_UPDATE_MAX];
+  LampColor colors[LAMP_MULTI_UPDATE_MAX];
+};
+
+struct __attribute__((packed)) LampRangeUpdateReport {
+  uint8_t lamp_update_flags;
+  uint16_t lamp_id_start;
+  uint16_t lamp_id_end;
+  LampColor color;
+};
+
+struct __attribute__((packed)) LampArrayControlReport {
+  uint8_t autonomous_mode;
+};
+
+// Sizes are dictated by the report descriptor below. A mismatch makes the host
+// silently ignore the device, so fail the build instead.
+static_assert(sizeof(LampColor) == 4, "LampColor must be 4 bytes");
+static_assert(sizeof(LampArrayAttributesReport) == 22, "LampArrayAttributesReport must be 22 bytes");
+static_assert(sizeof(LampAttributesRequestReport) == 2, "LampAttributesRequestReport must be 2 bytes");
+static_assert(sizeof(LampAttributesResponseReport) == 28, "LampAttributesResponseReport must be 28 bytes");
+static_assert(sizeof(LampMultiUpdateReport) == 50, "LampMultiUpdateReport must be 50 bytes");
+static_assert(sizeof(LampRangeUpdateReport) == 9, "LampRangeUpdateReport must be 9 bytes");
+static_assert(sizeof(LampArrayControlReport) == 1, "LampArrayControlReport must be 1 byte");
+
+// Largest payload the host pushes at us; the HID OUT buffer must fit it plus
+// the report ID byte, hence the -DCFG_TUD_HID_EP_BUFSIZE=64 build flag.
+static const uint16_t LAMP_ARRAY_MAX_REPORT_SIZE = sizeof(LampMultiUpdateReport);
+
+// Report descriptor, 292 bytes, report IDs (BASE + offset). Transcribed from
+// microsoft/ArduinoHidForWindows src/LampArrayReportDescriptor.h, itself
+// generated by WaratahCmd.exe against HID Usage Tables 1.4.
+// clang-format off
+#define LAMP_ARRAY_HID_REPORT_DESCRIPTOR(BASE)                                            \
+    0x05, 0x59,                     /* Usage Page (Lighting And Illumination) */          \
+    0x09, 0x01,                     /* Usage (LampArray) */                               \
+    0xA1, 0x01,                     /* Collection (Application) */                        \
+    0x85, (uint8_t)((BASE) + 0),    /*   Report ID (BASE+0) */                            \
+    0x09, 0x02,                     /*   Usage (LampArrayAttributesReport) */             \
+    0xA1, 0x02,                     /*   Collection (Logical) */                          \
+    0x09, 0x03,                     /*     Usage (LampCount) */                           \
+    0x15, 0x00,                     /*     Logical Minimum (0) */                         \
+    0x27, 0xFF, 0xFF, 0x00, 0x00,   /*     Logical Maximum (65535) */                     \
+    0x95, 0x01,                     /*     Report Count (1) */                            \
+    0x75, 0x10,                     /*     Report Size (16) */                            \
+    0xB1, 0x03,                     /*     Feature (Constant, Variable, Absolute) */      \
+    0x09, 0x04,                     /*     Usage (BoundingBoxWidthInMicrometers) */       \
+    0x09, 0x05,                     /*     Usage (BoundingBoxHeightInMicrometers) */      \
+    0x09, 0x06,                     /*     Usage (BoundingBoxDepthInMicrometers) */       \
+    0x09, 0x07,                     /*     Usage (LampArrayKind) */                       \
+    0x09, 0x08,                     /*     Usage (MinUpdateIntervalInMicroseconds) */     \
+    0x27, 0xFF, 0xFF, 0xFF, 0x7F,   /*     Logical Maximum (2147483647) */                \
+    0x95, 0x05,                     /*     Report Count (5) */                            \
+    0x75, 0x20,                     /*     Report Size (32) */                            \
+    0xB1, 0x03,                     /*     Feature (Constant, Variable, Absolute) */      \
+    0xC0,                           /*   End Collection */                                \
+    0x85, (uint8_t)((BASE) + 1),    /*   Report ID (BASE+1) */                            \
+    0x09, 0x20,                     /*   Usage (LampAttributesRequestReport) */           \
+    0xA1, 0x02,                     /*   Collection (Logical) */                          \
+    0x09, 0x21,                     /*     Usage (LampId) */                              \
+    0x27, 0xFF, 0xFF, 0x00, 0x00,   /*     Logical Maximum (65535) */                     \
+    0x95, 0x01,                     /*     Report Count (1) */                            \
+    0x75, 0x10,                     /*     Report Size (16) */                            \
+    0xB1, 0x02,                     /*     Feature (Data, Variable, Absolute) */          \
+    0xC0,                           /*   End Collection */                                \
+    0x85, (uint8_t)((BASE) + 2),    /*   Report ID (BASE+2) */                            \
+    0x09, 0x22,                     /*   Usage (LampAttributesResponseReport) */          \
+    0xA1, 0x02,                     /*   Collection (Logical) */                          \
+    0x09, 0x21,                     /*     Usage (LampId) */                              \
+    0xB1, 0x02,                     /*     Feature (Data, Variable, Absolute) */          \
+    0x09, 0x23,                     /*     Usage (PositionXInMicrometers) */              \
+    0x09, 0x24,                     /*     Usage (PositionYInMicrometers) */              \
+    0x09, 0x25,                     /*     Usage (PositionZInMicrometers) */              \
+    0x09, 0x27,                     /*     Usage (UpdateLatencyInMicroseconds) */         \
+    0x09, 0x26,                     /*     Usage (LampPurposes) */                        \
+    0x27, 0xFF, 0xFF, 0xFF, 0x7F,   /*     Logical Maximum (2147483647) */                \
+    0x95, 0x05,                     /*     Report Count (5) */                            \
+    0x75, 0x20,                     /*     Report Size (32) */                            \
+    0xB1, 0x02,                     /*     Feature (Data, Variable, Absolute) */          \
+    0x09, 0x28,                     /*     Usage (RedLevelCount) */                       \
+    0x09, 0x29,                     /*     Usage (GreenLevelCount) */                     \
+    0x09, 0x2A,                     /*     Usage (BlueLevelCount) */                      \
+    0x09, 0x2B,                     /*     Usage (IntensityLevelCount) */                 \
+    0x09, 0x2C,                     /*     Usage (IsProgrammable) */                      \
+    0x09, 0x2D,                     /*     Usage (InputBinding) */                        \
+    0x26, 0xFF, 0x00,               /*     Logical Maximum (255) */                       \
+    0x95, 0x06,                     /*     Report Count (6) */                            \
+    0x75, 0x08,                     /*     Report Size (8) */                             \
+    0xB1, 0x02,                     /*     Feature (Data, Variable, Absolute) */          \
+    0xC0,                           /*   End Collection */                                \
+    0x85, (uint8_t)((BASE) + 3),    /*   Report ID (BASE+3) */                            \
+    0x09, 0x50,                     /*   Usage (LampMultiUpdateReport) */                 \
+    0xA1, 0x02,                     /*   Collection (Logical) */                          \
+    0x09, 0x03,                     /*     Usage (LampCount) */                           \
+    0x25, 0x08,                     /*     Logical Maximum (8) */                         \
+    0x95, 0x01,                     /*     Report Count (1) */                            \
+    0xB1, 0x02,                     /*     Feature (Data, Variable, Absolute) */          \
+    0x09, 0x55,                     /*     Usage (LampUpdateFlags) */                     \
+    0x25, 0x01,                     /*     Logical Maximum (1) */                         \
+    0xB1, 0x02,                     /*     Feature (Data, Variable, Absolute) */          \
+    0x09, 0x21,                     /*     Usage (LampId) */                              \
+    0x27, 0xFF, 0xFF, 0x00, 0x00,   /*     Logical Maximum (65535) */                     \
+    0x95, 0x08,                     /*     Report Count (8) */                            \
+    0x75, 0x10,                     /*     Report Size (16) */                            \
+    0xB1, 0x02,                     /*     Feature (Data, Variable, Absolute) */          \
+    /* Red/Green/Blue/Intensity UpdateChannel, one group per addressable lamp */          \
+    0x09, 0x51, 0x09, 0x52, 0x09, 0x53, 0x09, 0x54,                                       \
+    0x09, 0x51, 0x09, 0x52, 0x09, 0x53, 0x09, 0x54,                                       \
+    0x09, 0x51, 0x09, 0x52, 0x09, 0x53, 0x09, 0x54,                                       \
+    0x09, 0x51, 0x09, 0x52, 0x09, 0x53, 0x09, 0x54,                                       \
+    0x09, 0x51, 0x09, 0x52, 0x09, 0x53, 0x09, 0x54,                                       \
+    0x09, 0x51, 0x09, 0x52, 0x09, 0x53, 0x09, 0x54,                                       \
+    0x09, 0x51, 0x09, 0x52, 0x09, 0x53, 0x09, 0x54,                                       \
+    0x09, 0x51, 0x09, 0x52, 0x09, 0x53, 0x09, 0x54,                                       \
+    0x26, 0xFF, 0x00,               /*     Logical Maximum (255) */                       \
+    0x95, 0x20,                     /*     Report Count (32) */                           \
+    0x75, 0x08,                     /*     Report Size (8) */                             \
+    0xB1, 0x02,                     /*     Feature (Data, Variable, Absolute) */          \
+    0xC0,                           /*   End Collection */                                \
+    0x85, (uint8_t)((BASE) + 4),    /*   Report ID (BASE+4) */                            \
+    0x09, 0x60,                     /*   Usage (LampRangeUpdateReport) */                 \
+    0xA1, 0x02,                     /*   Collection (Logical) */                          \
+    0x09, 0x55,                     /*     Usage (LampUpdateFlags) */                     \
+    0x25, 0x01,                     /*     Logical Maximum (1) */                         \
+    0x95, 0x01,                     /*     Report Count (1) */                            \
+    0xB1, 0x02,                     /*     Feature (Data, Variable, Absolute) */          \
+    0x09, 0x61,                     /*     Usage (LampIdStart) */                         \
+    0x09, 0x62,                     /*     Usage (LampIdEnd) */                           \
+    0x27, 0xFF, 0xFF, 0x00, 0x00,   /*     Logical Maximum (65535) */                     \
+    0x95, 0x02,                     /*     Report Count (2) */                            \
+    0x75, 0x10,                     /*     Report Size (16) */                            \
+    0xB1, 0x02,                     /*     Feature (Data, Variable, Absolute) */          \
+    0x09, 0x51,                     /*     Usage (RedUpdateChannel) */                    \
+    0x09, 0x52,                     /*     Usage (GreenUpdateChannel) */                  \
+    0x09, 0x53,                     /*     Usage (BlueUpdateChannel) */                   \
+    0x09, 0x54,                     /*     Usage (IntensityUpdateChannel) */              \
+    0x26, 0xFF, 0x00,               /*     Logical Maximum (255) */                       \
+    0x95, 0x04,                     /*     Report Count (4) */                            \
+    0x75, 0x08,                     /*     Report Size (8) */                             \
+    0xB1, 0x02,                     /*     Feature (Data, Variable, Absolute) */          \
+    0xC0,                           /*   End Collection */                                \
+    0x85, (uint8_t)((BASE) + 5),    /*   Report ID (BASE+5) */                            \
+    0x09, 0x70,                     /*   Usage (LampArrayControlReport) */                \
+    0xA1, 0x02,                     /*   Collection (Logical) */                          \
+    0x09, 0x71,                     /*     Usage (AutonomousMode) */                      \
+    0x25, 0x01,                     /*     Logical Maximum (1) */                         \
+    0x95, 0x01,                     /*     Report Count (1) */                            \
+    0xB1, 0x02,                     /*     Feature (Data, Variable, Absolute) */          \
+    0xC0,                           /*   End Collection */                                \
+    0xC0                            /* End Collection */
+// clang-format on
+
+// Static description of one lamp, in the units used by YAML (mm).
+struct LampInfo {
+  uint32_t x_mm;
+  uint32_t y_mm;
+  uint32_t z_mm;
+  uint32_t purposes;
+  uint8_t input_binding;
+  bool is_programmable;
+};
+
+// LampArray protocol state machine.
+//
+// Report handling runs on the TinyUSB task, everything else on the ESPHome
+// loop, so the colour caches are mutex-guarded and no automation is ever
+// triggered from inside a USB callback.
+class LampArrayCore {
+ public:
+  // Configuration, driven from the owning component.
+  void set_lamp_count(uint16_t count) { this->lamp_count_ = count; }
+  void set_bounding_box_mm(uint32_t width, uint32_t height, uint32_t depth) {
+    this->width_mm_ = width;
+    this->height_mm_ = height;
+    this->depth_mm_ = depth;
+  }
+  void set_rows(uint16_t rows) { this->rows_ = rows; }
+  void set_kind(uint32_t kind) { this->kind_ = kind; }
+  void set_min_update_interval_ms(uint32_t ms) { this->min_update_interval_ms_ = ms; }
+  void set_update_latency_ms(uint32_t ms) { this->update_latency_ms_ = ms; }
+  void set_default_purposes(uint32_t purposes) { this->default_purposes_ = purposes; }
+  void set_intensity_levels(uint8_t levels) { this->intensity_levels_ = levels; }
+  // Optional explicit geometry. When no lamps are added, an even grid is
+  // derived from the bounding box and row count instead.
+  void add_lamp(uint32_t x_mm, uint32_t y_mm, uint32_t z_mm, uint32_t purposes, uint8_t input_binding) {
+    this->lamps_.push_back(LampInfo{x_mm, y_mm, z_mm, purposes, input_binding, true});
+  }
+
+  // Allocates the colour caches. Returns false if allocation failed, in which
+  // case the lamp count is zeroed so every report handler below bails out
+  // rather than indexing empty buffers.
+  bool begin() {
+    if (this->lamp_count_ == 0)
+      return false;
+    this->write_.assign(this->lamp_count_, LampColor{0, 0, 0, 0});
+    this->committed_.assign(this->lamp_count_, LampColor{0, 0, 0, 0});
+    if (this->write_.size() != this->lamp_count_ || this->committed_.size() != this->lamp_count_) {
+      this->write_.clear();
+      this->committed_.clear();
+      this->lamp_count_ = 0;
+      return false;
+    }
+    return true;
+  }
+
+  uint16_t lamp_count() const { return this->lamp_count_; }
+  uint8_t intensity_levels() const { return this->intensity_levels_; }
+  uint32_t kind() const { return this->kind_; }
+  bool is_autonomous() const { return this->autonomous_.load(); }
+  // Increments on every committed frame; lets consumers skip idle work.
+  uint32_t frame() const { return this->frame_.load(); }
+
+  // --- TinyUSB task side. offset is (report_id - report_id_base). ---
+
+  // Fills buffer with a GET_REPORT(Feature) response and returns its length.
+  uint16_t handle_get_report(uint8_t offset, uint8_t *buffer, uint16_t reqlen) {
+    switch (offset) {
+      case REPORT_OFFSET_ARRAY_ATTRIBUTES: {
+        if (reqlen < sizeof(LampArrayAttributesReport))
+          return 0;
+        LampArrayAttributesReport report{};
+        report.lamp_count = this->lamp_count_;
+        report.bounding_box_width_um = mm_to_um(this->width_mm_);
+        report.bounding_box_height_um = mm_to_um(this->height_mm_);
+        report.bounding_box_depth_um = mm_to_um(this->depth_mm_);
+        report.lamp_array_kind = this->kind_;
+        report.min_update_interval_us = ms_to_us(this->min_update_interval_ms_);
+        std::memcpy(buffer, &report, sizeof(report));
+        return sizeof(report);
+      }
+      case REPORT_OFFSET_ATTRIBUTES_RESPONSE: {
+        if (reqlen < sizeof(LampAttributesResponseReport))
+          return 0;
+        const uint16_t lamp_id = this->requested_lamp_id_;
+        const LampInfo info = this->lamp_info(lamp_id);
+        LampAttributesResponseReport report{};
+        report.lamp_id = lamp_id;
+        report.position_x_um = mm_to_um(info.x_mm);
+        report.position_y_um = mm_to_um(info.y_mm);
+        report.position_z_um = mm_to_um(info.z_mm);
+        report.update_latency_us = ms_to_us(this->update_latency_ms_);
+        report.lamp_purposes = info.purposes;
+        report.red_level_count = 255;
+        report.green_level_count = 255;
+        report.blue_level_count = 255;
+        report.intensity_level_count = this->intensity_levels_;
+        report.is_programmable = info.is_programmable ? 1 : 0;
+        report.input_binding = info.input_binding;
+        std::memcpy(buffer, &report, sizeof(report));
+        // The host enumerates by reading this report repeatedly. Walk forward
+        // and stop at the last lamp; the host re-requests id 0 explicitly.
+        if (this->requested_lamp_id_ + 1 < this->lamp_count_)
+          this->requested_lamp_id_++;
+        return sizeof(report);
+      }
+      default:
+        return 0;
+    }
+  }
+
+  // Consumes a SET_REPORT(Feature) from the host. Returns true if handled.
+  bool handle_set_report(uint8_t offset, const uint8_t *buffer, uint16_t bufsize) {
+    switch (offset) {
+      case REPORT_OFFSET_ATTRIBUTES_REQUEST: {
+        if (bufsize < sizeof(LampAttributesRequestReport))
+          return false;
+        LampAttributesRequestReport report{};
+        std::memcpy(&report, buffer, sizeof(report));
+        // Per spec, an out-of-range LampId resets the walk to 0.
+        this->requested_lamp_id_ = report.lamp_id < this->lamp_count_ ? report.lamp_id : 0;
+        return true;
+      }
+      case REPORT_OFFSET_MULTI_UPDATE: {
+        if (bufsize < sizeof(LampMultiUpdateReport))
+          return false;
+        LampMultiUpdateReport report{};
+        std::memcpy(&report, buffer, sizeof(report));
+        const uint8_t count = report.lamp_count <= LAMP_MULTI_UPDATE_MAX ? report.lamp_count : LAMP_MULTI_UPDATE_MAX;
+        {
+          LockGuard guard(this->mutex_);
+          for (uint8_t i = 0; i < count; i++) {
+            const uint16_t id = report.lamp_ids[i];
+            if (id < this->lamp_count_)
+              this->write_[id] = report.colors[i];
+          }
+          this->commit_if_complete_(report.lamp_update_flags);
+        }
+        return true;
+      }
+      case REPORT_OFFSET_RANGE_UPDATE: {
+        if (bufsize < sizeof(LampRangeUpdateReport))
+          return false;
+        LampRangeUpdateReport report{};
+        std::memcpy(&report, buffer, sizeof(report));
+        if (report.lamp_id_start >= this->lamp_count_ || report.lamp_id_end >= this->lamp_count_ ||
+            report.lamp_id_start > report.lamp_id_end)
+          return false;
+        {
+          LockGuard guard(this->mutex_);
+          for (uint32_t id = report.lamp_id_start; id <= report.lamp_id_end; id++)
+            this->write_[id] = report.color;
+          this->commit_if_complete_(report.lamp_update_flags);
+        }
+        return true;
+      }
+      case REPORT_OFFSET_CONTROL: {
+        if (bufsize < sizeof(LampArrayControlReport))
+          return false;
+        LampArrayControlReport report{};
+        std::memcpy(&report, buffer, sizeof(report));
+        const bool autonomous = report.autonomous_mode != 0;
+        if (autonomous != this->autonomous_.exchange(autonomous))
+          this->autonomous_changed_.store(true);
+        return true;
+      }
+      default:
+        return false;
+    }
+  }
+
+  // Host went away; fall back to device-owned lighting. Called from the ESPHome
+  // loop, so it touches only atomics - requested_lamp_id_ stays owned by the
+  // USB task, and the host re-requests lamp 0 explicitly on reconnect anyway.
+  void on_disconnect() {
+    if (!this->autonomous_.exchange(true))
+      this->autonomous_changed_.store(true);
+  }
+
+  // --- ESPHome loop side. ---
+
+  // Copies the last committed frame into out, which must hold lamp_count()
+  // entries. There can be several consumers (per-lamp automations, one light
+  // effect per strip), so each tracks frame() itself rather than sharing a
+  // cursor here.
+  void snapshot(LampColor *out) {
+    LockGuard guard(this->mutex_);
+    std::memcpy(out, this->committed_.data(), this->committed_.size() * sizeof(LampColor));
+  }
+
+  // Reports an autonomous-mode transition exactly once.
+  bool poll_autonomous_change(bool *autonomous) {
+    if (!this->autonomous_changed_.exchange(false))
+      return false;
+    *autonomous = this->autonomous_.load();
+    return true;
+  }
+
+  // Single-lamp read for lambdas. Out-of-range ids read black.
+  LampColor get_color(uint16_t lamp_id) {
+    if (lamp_id >= this->lamp_count_)
+      return LampColor{0, 0, 0, 0};
+    LockGuard guard(this->mutex_);
+    return this->committed_[lamp_id];
+  }
+
+  // Geometry of one lamp: explicit if configured, otherwise an even grid
+  // spread across the bounding box, cell-centred.
+  LampInfo lamp_info(uint16_t lamp_id) const {
+    if (lamp_id < this->lamps_.size())
+      return this->lamps_[lamp_id];
+    LampInfo info{};
+    info.purposes = this->default_purposes_;
+    info.is_programmable = true;
+    info.input_binding = 0;
+    if (this->lamp_count_ == 0)
+      return info;
+    const uint32_t rows = this->rows_ > 0 ? this->rows_ : 1;
+    const uint32_t cols = (this->lamp_count_ + rows - 1) / rows;
+    if (cols == 0)
+      return info;
+    const uint32_t col = lamp_id % cols;
+    const uint32_t row = lamp_id / cols;
+    info.x_mm = (this->width_mm_ * (2 * col + 1)) / (2 * cols);
+    info.y_mm = (this->height_mm_ * (2 * row + 1)) / (2 * rows);
+    info.z_mm = this->depth_mm_ / 2;
+    return info;
+  }
+
+ protected:
+  // Caller must hold mutex_.
+  void commit_if_complete_(uint8_t flags) {
+    if ((flags & LAMP_UPDATE_FLAG_UPDATE_COMPLETE) == 0)
+      return;
+    // Copy, never swap pointers: the write cache has to keep accumulating from
+    // the state the host just committed.
+    std::memcpy(this->committed_.data(), this->write_.data(), this->write_.size() * sizeof(LampColor));
+    this->frame_.fetch_add(1);
+  }
+
+  static uint32_t mm_to_um(uint32_t mm) { return mm * 1000; }
+  static uint32_t ms_to_us(uint32_t ms) { return ms * 1000; }
+
+  uint16_t lamp_count_{0};
+  uint32_t width_mm_{0};
+  uint32_t height_mm_{0};
+  uint32_t depth_mm_{0};
+  uint16_t rows_{1};
+  uint32_t kind_{LAMP_ARRAY_KIND_PERIPHERAL};
+  uint32_t min_update_interval_ms_{33};
+  uint32_t update_latency_ms_{33};
+  uint32_t default_purposes_{LAMP_PURPOSE_ACCENT};
+  uint8_t intensity_levels_{1};
+  std::vector<LampInfo> lamps_;
+
+  // Host-driven colour state. write_ accumulates a batch, committed_ holds the
+  // last frame the host declared complete.
+  std::vector<LampColor> write_;
+  std::vector<LampColor> committed_;
+  Mutex mutex_;
+  std::atomic<uint32_t> frame_{0};
+
+  // Which lamp the host reads attributes for next.
+  uint16_t requested_lamp_id_{0};
+
+  // Devices own their lighting until the host claims control.
+  std::atomic<bool> autonomous_{true};
+  std::atomic<bool> autonomous_changed_{false};
+};
+
+}  // namespace lamp_array_core
+}  // namespace esphome

@@ -1,7 +1,7 @@
 import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome.components import binary_sensor
-from esphome.const import CONF_ID, CONF_TYPE, DEVICE_CLASS_CONNECTIVITY
+from esphome.const import DEVICE_CLASS_CONNECTIVITY
 
 from .. import hid_composite_ns, HIDComposite
 
@@ -22,37 +22,6 @@ HIDInCallBinarySensor = hid_composite_ns.class_(
 HIDRingingBinarySensor = hid_composite_ns.class_(
     "HIDRingingBinarySensor", binary_sensor.BinarySensor, cg.Component
 )
-
-TYPES = {
-    "connected": {
-        "class": HIDConnectedBinarySensor,
-        "device_class": DEVICE_CLASS_CONNECTIVITY,
-        "polling": True,
-    },
-    "muted": {
-        "class": HIDMutedBinarySensor,
-        "device_class": "sound",
-        "polling": False,
-    },
-    "in_call": {
-        "class": HIDInCallBinarySensor,
-        "device_class": "occupancy",
-        "polling": False,
-    },
-    "ringing": {
-        "class": HIDRingingBinarySensor,
-        "device_class": "sound",
-        "polling": False,
-    },
-}
-
-
-def validate_type(value):
-    value = cv.string_strict(value).lower()
-    if value not in TYPES:
-        raise cv.Invalid(f"Unknown sensor type: {value}. Valid types are: {list(TYPES.keys())}")
-    return value
-
 
 CONFIG_SCHEMA = cv.typed_schema(
     {

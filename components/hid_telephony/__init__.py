@@ -7,7 +7,7 @@ CODEOWNERS = ["@AntorFr"]
 DEPENDENCIES = ["esp32"]
 
 # Cannot be used with other HID components (each configures USB)
-CONFLICTS_WITH = ["hid_mouse", "hid_keyboard", "hid_composite"]
+CONFLICTS_WITH = ["hid_mouse", "hid_keyboard", "hid_composite", "hid_lamp_array"]
 
 hid_telephony_ns = cg.esphome_ns.namespace("hid_telephony")
 HIDTelephony = hid_telephony_ns.class_("HIDTelephony", cg.Component)

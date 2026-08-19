@@ -7,7 +7,7 @@ DEPENDENCIES = ["esp32"]
 CODEOWNERS = ["@AntorFr"]
 
 # Cannot be used with hid_mouse or hid_composite (each configures USB)
-CONFLICTS_WITH = ["hid_mouse", "hid_composite"]
+CONFLICTS_WITH = ["hid_mouse", "hid_composite", "hid_telephony", "hid_lamp_array"]
 
 CONF_LAYOUT = "layout"
 

@@ -22,6 +22,10 @@ HIDTelephony *g_hid_telephony_instance = nullptr;
 #define REPORT_ID_TELEPHONY 1
 #define REPORT_ID_CONSUMER 2
 
+// How long the mute / hook buttons stay pressed before being released.
+static const uint32_t MUTE_PULSE_MS = 50;
+static const uint32_t HOOK_PULSE_MS = 50;
+
 // Telephony HID Report Descriptor
 // Based on Poly BT700 Teams-certified headset descriptor analysis
 // Key insight: Phone Mute uses RELATIVE flag (0x06) not ABSOLUTE (0x02)
@@ -71,36 +75,39 @@ static const uint8_t hid_report_descriptor[] = {
     0x81, 0x03,        //   Input (Constant)
     
     // ===== OUTPUT REPORT (LEDs host sends to us) =====
-    // Back to Telephony page for LEDs
-    0x05, 0x0B,        //   Usage Page (Telephony Devices)
     0x75, 0x01,        //   Report Size (1)
-    
-    // Mute LED - bit 0 (Usage 0x18 = Do Not Disturb, used by Poly for mute indicator)
+
+    // LED usage IDs per HID Usage Tables 1.4, LED page (0x08). The previous
+    // revision mislabelled 0x18 as "Do Not Disturb" (it is Ring) and 0x20 as
+    // "On-Line" (it is Hold), so a ringing call read back as muted. Bit order
+    // now matches hid_composite so both components behave identically.
+
+    // Mute LED - bit 0 (Usage 0x09)
     0x95, 0x01,        //   Report Count (1)
     0x05, 0x08,        //   Usage Page (LEDs)
-    0x09, 0x18,        //   Usage (Do Not Disturb) - Poly Report 33
+    0x09, 0x09,        //   Usage (Mute)
     0x91, 0x22,        //   Output (Data, Variable, Absolute, No Preferred State)
-    
-    // Speaker LED - bit 1 (Usage 0x1E)
+
+    // Off-Hook LED - bit 1 (Usage 0x17)
     0x95, 0x01,        //   Report Count (1)
-    0x09, 0x1E,        //   Usage (Speaker) - Poly Report 34
+    0x09, 0x17,        //   Usage (Off-Hook)
     0x91, 0x22,        //   Output (Data, Variable, Absolute, No Preferred State)
-    
-    // Mute LED alternate - bit 2 (Usage 0x09)
+
+    // Ring LED - bit 2 (Usage 0x18)
     0x95, 0x01,        //   Report Count (1)
-    0x09, 0x09,        //   Usage (Mute) - Poly Report 35
+    0x09, 0x18,        //   Usage (Ring)
     0x91, 0x22,        //   Output (Data, Variable, Absolute, No Preferred State)
-    
-    // Off Hook LED - bit 3 (Usage 0x17)
+
+    // Hold LED - bit 3 (Usage 0x20)
     0x95, 0x01,        //   Report Count (1)
-    0x09, 0x17,        //   Usage (Off Hook) - Poly Report 36
+    0x09, 0x20,        //   Usage (Hold)
     0x91, 0x22,        //   Output (Data, Variable, Absolute, No Preferred State)
-    
-    // Ring LED - bit 4 (Usage 0x20)
+
+    // Microphone LED - bit 4 (Usage 0x21); some apps drive this instead of Mute
     0x95, 0x01,        //   Report Count (1)
-    0x09, 0x20,        //   Usage (On-Line) - Poly Report 37
+    0x09, 0x21,        //   Usage (Microphone)
     0x91, 0x22,        //   Output (Data, Variable, Absolute, No Preferred State)
-    
+
     // Padding - bits 5-7
     0x95, 0x03,        //   Report Count (3)
     0x91, 0x03,        //   Output (Constant)
@@ -147,7 +154,7 @@ static const tusb_desc_device_t device_descriptor = {
     .bMaxPacketSize0 = CFG_TUD_ENDPOINT0_SIZE,
     .idVendor = 0x303A,  // Espressif VID
     .idProduct = 0x4005, // Custom PID for Telephony
-    .bcdDevice = 0x0100,
+    .bcdDevice = 0x0101,  // bumped when the report descriptor changed, so hosts re-read it
     .iManufacturer = 0x01,
     .iProduct = 0x02,
     .iSerialNumber = 0x03,
@@ -238,7 +245,36 @@ void HIDTelephony::setup() {
 }
 
 void HIDTelephony::loop() {
-  // Nothing to do in loop for now
+  // The host's LED reports arrive on the TinyUSB task. Entities are published
+  // here instead, because publish_state() touches the API/MQTT queues and the
+  // scheduler, none of which are safe to use from another task.
+  if (!this->led_state_dirty_.exchange(false))
+    return;
+
+  const uint8_t leds = this->last_led_report_.load();
+  ESP_LOGI(TAG, "Received LED report: 0x%02X (mute=%d, offhook=%d, ring=%d, hold=%d, mic=%d)", leds,
+           (leds & 0x01) != 0, (leds & 0x02) != 0, (leds & 0x04) != 0, (leds & 0x08) != 0, (leds & 0x10) != 0);
+
+  const bool muted = this->muted_.load();
+  if (muted != this->published_muted_) {
+    this->published_muted_ = muted;
+    ESP_LOGI(TAG, "Mute state changed: %s", muted ? "MUTED" : "UNMUTED");
+    this->mute_callbacks_.call(muted);
+  }
+
+  const bool off_hook = this->off_hook_.load();
+  if (off_hook != this->published_off_hook_) {
+    this->published_off_hook_ = off_hook;
+    ESP_LOGI(TAG, "Off-hook state changed: %s", off_hook ? "IN CALL" : "IDLE");
+    this->off_hook_callbacks_.call(off_hook);
+  }
+
+  const bool ringing = this->ringing_.load();
+  if (ringing != this->published_ringing_) {
+    this->published_ringing_ = ringing;
+    ESP_LOGI(TAG, "Ring state changed: %s", ringing ? "RINGING" : "NOT RINGING");
+    this->ring_callbacks_.call(ringing);
+  }
 }
 
 void HIDTelephony::dump_config() {
@@ -276,109 +312,99 @@ void HIDTelephony::send_consumer_mute_() {
            REPORT_ID_CONSUMER, this->mute_button_);
 }
 
+// Runs on the TinyUSB task: cache the state and flag it, nothing more. loop()
+// does the publishing.
 void HIDTelephony::process_host_report(uint8_t const *buffer, uint16_t bufsize) {
   if (bufsize < 1) return;
-  
+
   uint8_t leds = buffer[0];
-  
-  // LED bit mapping (matching new descriptor based on Poly BT700):
-  // bit 0: Do Not Disturb (0x18) - Teams uses this for mute indicator
-  // bit 1: Speaker (0x1E)
-  // bit 2: Mute (0x09) - alternate mute LED
-  // bit 3: Off Hook (0x17)
-  // bit 4: On-Line (0x20) - ring/call indicator
-  
-  bool new_muted = ((leds & 0x01) != 0) || ((leds & 0x04) != 0);  // DND or Mute LED
-  bool new_off_hook = (leds & 0x08) != 0;  // Off Hook LED - bit 3
-  bool new_ringing = (leds & 0x10) != 0;   // On-Line LED - bit 4
-  bool new_hold = false;  // Not mapped currently
-  
-  ESP_LOGD(TAG, "Received LED report: 0x%02X (mute=%d, offhook=%d, ring=%d)", 
-           leds, new_muted, new_off_hook, new_ringing);
-  
-  // Check for changes and trigger callbacks
-  if (new_muted != this->muted_) {
-    this->muted_ = new_muted;
-    ESP_LOGI(TAG, "Mute state changed: %s", new_muted ? "MUTED" : "UNMUTED");
-    this->mute_callbacks_.call(new_muted);
-  }
-  
-  if (new_off_hook != this->off_hook_) {
-    this->off_hook_ = new_off_hook;
-    ESP_LOGI(TAG, "Off-hook state changed: %s", new_off_hook ? "IN CALL" : "IDLE");
-    this->off_hook_callbacks_.call(new_off_hook);
-  }
-  
-  if (new_ringing != this->ringing_) {
-    this->ringing_ = new_ringing;
-    ESP_LOGI(TAG, "Ring state changed: %s", new_ringing ? "RINGING" : "NOT RINGING");
-    this->ring_callbacks_.call(new_ringing);
-  }
-  
-  this->hold_ = new_hold;
+
+  // LED bit mapping, matching the output report in the descriptor above.
+  // Usage IDs are from HID Usage Tables 1.4, LED page (0x08).
+  // bit 0: Mute (0x09)
+  // bit 1: Off-Hook (0x17)
+  // bit 2: Ring (0x18)
+  // bit 3: Hold (0x20)
+  // bit 4: Microphone (0x21) - some apps drive this instead of Mute
+  const bool mute_led = (leds & 0x01) != 0;
+  const bool mic_led = (leds & 0x10) != 0;
+
+  this->muted_.store(mute_led || mic_led);
+  this->off_hook_.store((leds & 0x02) != 0);
+  this->ringing_.store((leds & 0x04) != 0);
+  this->hold_.store((leds & 0x08) != 0);
+  this->host_state_known_.store(true);
+  this->last_led_report_.store(leds);
+  this->led_state_dirty_.store(true);
 }
 
-void HIDTelephony::mute() {
-  ESP_LOGI(TAG, "Sending mute button press (Telephony + Consumer)");
+void HIDTelephony::mute() { this->set_mute(true); }
+
+// Presses and releases the mute button. The press/release gap is scheduled
+// rather than delay()ed, so the ESPHome loop keeps running.
+void HIDTelephony::send_mute_pulse_(bool telephony, bool consumer) {
   this->mute_button_ = true;
-  
-  // Send BOTH reports to test which one Teams recognizes
-  this->send_report_();           // Telephony Page (0x0B) - Report ID 1
-  delay(10);
-  this->send_consumer_mute_();    // Consumer Page (0x0C) - Report ID 2
-  
-  delay(50);
-  
-  this->mute_button_ = false;
-  this->send_report_();           // Release Telephony
-  delay(10);
-  this->send_consumer_mute_();    // Release Consumer
+  if (telephony)
+    this->send_report_();
+  if (consumer)
+    this->send_consumer_mute_();
+
+  this->set_timeout("mute_release", MUTE_PULSE_MS, [this, telephony, consumer]() {
+    this->mute_button_ = false;
+    if (telephony)
+      this->send_report_();
+    if (consumer)
+      this->send_consumer_mute_();
+  });
 }
 
 void HIDTelephony::mute_telephony() {
   ESP_LOGI(TAG, "Sending TELEPHONY mute only (Page 0x0B, Usage 0x2F)");
-  this->mute_button_ = true;
-  this->send_report_();
-  delay(50);
-  this->mute_button_ = false;
-  this->send_report_();
+  this->send_mute_pulse_(true, false);
 }
 
 void HIDTelephony::mute_consumer() {
   ESP_LOGI(TAG, "Sending CONSUMER mute only (Page 0x0C, Usage 0xE2)");
-  this->mute_button_ = true;
-  this->send_consumer_mute_();
-  delay(50);
-  this->mute_button_ = false;
-  this->send_consumer_mute_();
+  this->send_mute_pulse_(false, true);
 }
 
-void HIDTelephony::unmute() {
-  // Same as mute - it's a toggle button
-  this->mute();
+// The mute button is a toggle on the wire, so an absolute request only presses
+// it when the PC's reported state disagrees. Until the host has sent an LED
+// report there is nothing to compare against, so press and let it tell us.
+void HIDTelephony::set_mute(bool state) {
+  if (this->host_state_known_.load() && this->muted_.load() == state) {
+    ESP_LOGD(TAG, "Already %s, nothing to send", state ? "muted" : "unmuted");
+    return;
+  }
+  ESP_LOGI(TAG, "Requesting %s", state ? "mute" : "unmute");
+  this->send_mute_pulse_(true, true);
 }
+
+void HIDTelephony::unmute() { this->set_mute(false); }
 
 void HIDTelephony::toggle_mute() {
-  this->mute();
+  ESP_LOGI(TAG, "Toggling mute");
+  this->send_mute_pulse_(true, true);
 }
 
 void HIDTelephony::hook_switch() {
   ESP_LOGI(TAG, "Sending hook switch press");
   this->hook_button_ = true;
   this->send_report_();
-  delay(50);
-  this->hook_button_ = false;
-  this->send_report_();
+  this->set_timeout("hook_release", HOOK_PULSE_MS, [this]() {
+    this->hook_button_ = false;
+    this->send_report_();
+  });
 }
 
 void HIDTelephony::answer() {
-  if (!this->off_hook_) {
+  if (!this->off_hook_.load()) {
     this->hook_switch();
   }
 }
 
 void HIDTelephony::hang_up() {
-  if (this->off_hook_) {
+  if (this->off_hook_.load()) {
     this->hook_switch();
   }
 }
@@ -408,17 +434,22 @@ namespace hid_telephony {
 static const char *const TAG = "hid_telephony";
 HIDTelephony *g_hid_telephony_instance = nullptr;
 
-void HIDTelephony::setup() { ESP_LOGE(TAG, "Only supported on ESP32-S3/S2"); }
+void HIDTelephony::setup() { ESP_LOGE(TAG, "Only supported on ESP32 chips with USB OTG (S2/S3/P4)"); }
 void HIDTelephony::loop() {}
 void HIDTelephony::dump_config() {}
 void HIDTelephony::mute() {}
 void HIDTelephony::unmute() {}
 void HIDTelephony::toggle_mute() {}
+void HIDTelephony::set_mute(bool state) {}
+void HIDTelephony::mute_telephony() {}
+void HIDTelephony::mute_consumer() {}
 void HIDTelephony::hook_switch() {}
 void HIDTelephony::answer() {}
 void HIDTelephony::hang_up() {}
 void HIDTelephony::send_report_() {}
-void HIDTelephony::process_host_report_(uint8_t const *buffer, uint16_t bufsize) {}
+void HIDTelephony::send_consumer_mute_() {}
+void HIDTelephony::send_mute_pulse_(bool telephony, bool consumer) {}
+void HIDTelephony::process_host_report(uint8_t const *buffer, uint16_t bufsize) {}
 bool HIDTelephony::is_connected() { return false; }
 bool HIDTelephony::is_ready() { return false; }
 

@@ -1,6 +1,10 @@
 esphome:
   name: test-keyboard-switch
 
+  platformio_options:
+    build_flags:
+      - -DCFG_TUD_HID=1
+
 esp32:
   board: esp32-s3-devkitc-1
   framework:

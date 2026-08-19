@@ -5,6 +5,10 @@ esphome:
   name: ai-s3-mouse
   friendly_name: "AI-S3 HID Mouse"
 
+  platformio_options:
+    build_flags:
+      - -DCFG_TUD_HID=1
+
 esp32:
   board: esp32-s3-devkitc-1
   framework:

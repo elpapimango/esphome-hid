@@ -1,0 +1,81 @@
+# Mouse + keyboard + telephony + LampArray on one USB device.
+#
+# The lamps sit at report IDs 6-11, after the keyboard, mouse, telephony and
+# consumer reports. Because the descriptor changes, this build enumerates under
+# PID 0x4007 instead of the plain composite's 0x4004.
+
+esphome:
+  name: test-composite-lamp-array
+  platformio_options:
+    build_flags:
+      - -DCFG_TUD_HID=1
+      # A LampArray multi-update report is 51 bytes with its report ID and has
+      # to fit TinyUSB's HID buffer.
+      - -DCFG_TUD_HID_EP_BUFSIZE=64
+
+esp32:
+  board: esp32-s3-devkitc-1
+  framework:
+    type: esp-idf
+    sdkconfig_options:
+      CONFIG_USJ_ENABLE_USB_SERIAL_JTAG: "n"
+      CONFIG_TINYUSB_HID_COUNT: "1"
+      CONFIG_ESP_CONSOLE_UART_DEFAULT: "y"
+    components:
+      - espressif/esp_tinyusb~2.0.0
+
+logger:
+  hardware_uart: UART0
+
+external_components:
+  - source:
+      type: local
+      path: ../components
+    components: [hid_composite]
+
+hid_composite:
+  id: my_hid
+  layout: QWERTY_US
+  lamp_array:
+    lamp_count: 12
+    kind: KEYBOARD
+    # 4x3 macropad, keys on a 19mm pitch.
+    width: 76mm
+    height: 57mm
+    depth: 10mm
+    rows: 3
+    purposes: [CONTROL]
+    on_lamp_update:
+      - lambda: |-
+          ESP_LOGD("lamps", "lamp %u -> %02X%02X%02X", lamp_id, color.r, color.g, color.b);
+
+light:
+  - platform: esp32_rmt_led_strip
+    id: keys
+    name: "Key Backlight"
+    pin: GPIO48
+    num_leds: 12
+    rgb_order: GRB
+    chipset: ws2812
+    effects:
+      - lamp_array:
+          hid_composite_id: my_hid
+
+binary_sensor:
+  - platform: hid_composite
+    type: connected
+    name: "PC Connected"
+
+  - platform: gpio
+    pin:
+      number: GPIO0
+      inverted: true
+    name: "Key 1"
+    on_press:
+      - hid_composite.key_tap:
+          key: "a"
+
+switch:
+  - platform: hid_composite
+    type: mute
+    name: "Mute"

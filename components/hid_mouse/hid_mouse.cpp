@@ -1,6 +1,8 @@
 #include "hid_mouse.h"
 #include "esphome/core/log.h"
 #include "esphome/core/hal.h"
+#include "esphome/core/helpers.h"  // random_uint32()
+#include <cinttypes>
 
 #ifdef USE_ESP32
 
@@ -17,6 +19,9 @@ static const char *const TAG = "hid_mouse";
 
 // Singleton for callbacks
 static HIDMouse *g_hid_mouse_instance = nullptr;
+
+// How long a click holds the button down before releasing.
+static const uint32_t CLICK_HOLD_MS = 50;
 
 // HID Report Descriptor for Mouse (Boot protocol compatible)
 static const uint8_t hid_report_descriptor[] = {
@@ -171,19 +176,21 @@ void HIDMouse::loop() {
   if (this->keep_awake_enabled_) {
     uint32_t now = millis();
     if (now - this->keep_awake_last_time_ >= this->keep_awake_next_interval_) {
-      // Generate random movement (-1 to 1)
-      int8_t dx = (rand() % 3) - 1;
-      int8_t dy = (rand() % 3) - 1;
+      // Generate random movement (-1 to 1). random_uint32() is the hardware RNG,
+      // so unlike rand() it does not replay the same sequence every boot.
+      int8_t dx = (int8_t) (random_uint32() % 3) - 1;
+      int8_t dy = (int8_t) (random_uint32() % 3) - 1;
       if (dx == 0 && dy == 0) dx = 1;  // Ensure at least some movement
-      
+
       this->move(dx, dy);
       ESP_LOGD(TAG, "Keep awake: move(%d, %d)", dx, dy);
-      
+
       // Calculate next interval with jitter
       this->keep_awake_next_interval_ = this->keep_awake_interval_;
       if (this->keep_awake_jitter_ > 0) {
-        int32_t jitter = (rand() % (this->keep_awake_jitter_ * 2 + 1)) - this->keep_awake_jitter_;
-        this->keep_awake_next_interval_ = (int32_t)this->keep_awake_interval_ + jitter > 1000 
+        int32_t jitter = (int32_t) (random_uint32() % (this->keep_awake_jitter_ * 2 + 1)) -
+                         (int32_t) this->keep_awake_jitter_;
+        this->keep_awake_next_interval_ = (int32_t)this->keep_awake_interval_ + jitter > 1000
                                           ? this->keep_awake_interval_ + jitter : 1000;
       }
       this->keep_awake_last_time_ = now;
@@ -237,8 +244,9 @@ void HIDMouse::move(int8_t x, int8_t y) {
 void HIDMouse::click(MouseButton button) {
   ESP_LOGD(TAG, "Click: button=%d", button);
   this->press(button);
-  delay(50);
-  this->release(button);
+  // Release from the scheduler instead of delay()ing: a blocking wait here
+  // stalls every other component in the ESPHome loop.
+  this->set_timeout("click", CLICK_HOLD_MS, [this, button]() { this->release(button); });
 }
 
 void HIDMouse::press(MouseButton button) {
@@ -272,7 +280,7 @@ void HIDMouse::scroll(int8_t amount) {
 }
 
 void HIDMouse::start_keep_awake(uint32_t interval_ms, uint32_t jitter_ms) {
-  ESP_LOGI(TAG, "Starting keep awake: interval=%dms, jitter=%dms", interval_ms, jitter_ms);
+  ESP_LOGI(TAG, "Starting keep awake: interval=%" PRIu32 "ms, jitter=%" PRIu32 "ms", interval_ms, jitter_ms);
   this->keep_awake_interval_ = interval_ms;
   this->keep_awake_jitter_ = jitter_ms;
   this->keep_awake_last_time_ = millis();
@@ -302,16 +310,19 @@ bool HIDMouse::is_ready() {
 }  // namespace hid_mouse
 }  // namespace esphome
 
-#endif  // HID_MOUSE_SUPPORTED
+#else  // HID_MOUSE_SUPPORTED
 
-#else  // USE_ESP32
-
-// Stubs for non-ESP32 platforms
+// Stubs for ESP32 variants without USB OTG. The class is only declared inside
+// USE_ESP32, so this block has to sit inside it too.
 namespace esphome {
 namespace hid_mouse {
-void HIDMouse::setup() {}
+
+static const char *const TAG = "hid_mouse";
+
+void HIDMouse::setup() { ESP_LOGE(TAG, "Only supported on ESP32 chips with USB OTG (S2/S3/P4)"); }
 void HIDMouse::loop() {}
 void HIDMouse::dump_config() {}
+void HIDMouse::send_report_() {}
 void HIDMouse::move(int8_t x, int8_t y) {}
 void HIDMouse::click(MouseButton button) {}
 void HIDMouse::press(MouseButton button) {}
@@ -321,7 +332,10 @@ void HIDMouse::start_keep_awake(uint32_t interval_ms, uint32_t jitter_ms) {}
 void HIDMouse::stop_keep_awake() {}
 bool HIDMouse::is_connected() { return false; }
 bool HIDMouse::is_ready() { return false; }
+
 }  // namespace hid_mouse
 }  // namespace esphome
+
+#endif  // HID_MOUSE_SUPPORTED
 
 #endif  // USE_ESP32

@@ -5,8 +5,10 @@
 
 #ifdef USE_ESP32
 
-// Check for ESP32-S2, ESP32-S3, or ESP32-P4 (chips with USB OTG)
-#if defined(USE_ESP32_VARIANT_ESP32S2) || defined(USE_ESP32_VARIANT_ESP32S3) || defined(USE_ESP32_VARIANT_ESP32P4)
+// Chips with native USB OTG (ESP32-S2, S3, P4). Ask the SoC caps header rather
+// than listing variants, so every HID component agrees on the same test.
+#include <soc/soc_caps.h>
+#if SOC_USB_OTG_SUPPORTED
 #define HID_MOUSE_SUPPORTED
 #endif
 

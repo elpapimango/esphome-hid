@@ -21,12 +21,14 @@ void MuteSwitch::dump_config() {
 }
 
 void MuteSwitch::write_state(bool state) {
-  // Send toggle mute command to PC
-  // The actual state update will come from the callback when PC confirms
-  this->parent_->toggle_mute();
-  
-  // Note: We don't publish_state here because the PC will send us the actual state
-  // via the callback. This ensures the switch reflects the real PC state.
+  // Drive the PC towards the requested state. set_mute() sends nothing when the
+  // PC already reports that state, so turn_on/turn_off stay idempotent instead
+  // of blind-toggling (which used to unmute a call when asked to mute it).
+  this->parent_->set_mute(state);
+
+  // Publish our best knowledge now so the UI is never stuck: once the PC sends
+  // an LED report, the mute callback publishes the confirmed state over this.
+  this->publish_state(this->parent_->host_state_known() ? this->parent_->is_muted() : state);
 }
 
 }  // namespace hid_telephony

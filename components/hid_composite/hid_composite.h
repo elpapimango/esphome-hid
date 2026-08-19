@@ -1,14 +1,22 @@
 #pragma once
 
+#include "esphome/core/automation.h"
+#include "esphome/core/color.h"
 #include "esphome/core/component.h"
 #include "esphome/core/helpers.h"
-#include "esphome/core/automation.h"
 
 #ifdef USE_ESP32
 #include <soc/soc_caps.h>
 #if SOC_USB_OTG_SUPPORTED
 #define HID_COMPOSITE_SUPPORTED
 #endif
+#endif
+
+#include <atomic>
+
+#ifdef USE_HID_COMPOSITE_LAMP_ARRAY
+#include <vector>
+#include "lamp_array_core.h"
 #endif
 
 namespace esphome {
@@ -76,10 +84,13 @@ class HIDComposite : public Component {
   bool is_connected();
   bool is_ready();
   
-  // Telephony functions
+  // Telephony functions. The mute button is a toggle on the wire, so mute() and
+  // unmute() drive the PC towards the requested state using the mute state it
+  // last reported; toggle_mute() always sends a press.
   void mute();
   void unmute();
   void toggle_mute();
+  void set_mute(bool state);
   void mute_telephony();   // Envoie uniquement le rapport Telephony (0x0B)
   void mute_consumer();    // Envoie Consumer Mute (system volume)
   void mute_teams();       // Envoie Ctrl+Shift+M (Teams shortcut)
@@ -91,11 +102,14 @@ class HIDComposite : public Component {
   void volume_up();
   void volume_down();
   
-  // Telephony state getters
-  bool is_muted() { return this->muted_; }
-  bool is_off_hook() { return this->off_hook_; }
-  bool is_ringing() { return this->ringing_; }
-  bool is_hold() { return this->hold_; }
+  // Telephony state getters. Written from the TinyUSB task, read from the loop.
+  bool is_muted() { return this->muted_.load(); }
+  bool is_off_hook() { return this->off_hook_.load(); }
+  bool is_ringing() { return this->ringing_.load(); }
+  bool is_hold() { return this->hold_.load(); }
+  // True once the host has sent an LED report, i.e. the states above reflect
+  // the PC rather than our defaults.
+  bool host_state_known() const { return this->host_state_known_.load(); }
   
   // Telephony callbacks
   void add_on_mute_callback(std::function<void(bool)> &&callback) { this->mute_callbacks_.add(std::move(callback)); }
@@ -105,6 +119,26 @@ class HIDComposite : public Component {
   
   // Process host report (for telephony LED states) - Poly BT700 format with separate Report IDs
   void process_host_report(uint8_t report_id, uint8_t const *buffer, uint16_t bufsize);
+
+#ifdef USE_HID_COMPOSITE_LAMP_ARRAY
+  // ============ LampArray (host-driven lighting) ============
+  // Protocol state, configured from codegen and read by the light effect.
+  lamp_array_core::LampArrayCore &core() { return this->lamp_array_; }
+
+  uint16_t lamp_count() const { return this->lamp_array_.lamp_count(); }
+  // True while the host has not claimed the lamps.
+  bool is_autonomous() const { return this->lamp_array_.is_autonomous(); }
+  // Host-set colour of one lamp, with the intensity channel folded in.
+  Color get_lamp_color(uint16_t lamp_id);
+
+  void add_on_lamp_update_callback(std::function<void(uint16_t, Color)> &&callback) {
+    this->lamp_update_callbacks_.add(std::move(callback));
+    this->want_lamp_updates_ = true;
+  }
+  void add_on_autonomous_mode_callback(std::function<void(bool)> &&callback) {
+    this->autonomous_callbacks_.add(std::move(callback));
+  }
+#endif
 
  protected:
   bool initialized_{false};
@@ -134,22 +168,86 @@ class HIDComposite : public Component {
   uint32_t keyboard_keep_awake_last_time_{0};
   uint32_t keyboard_keep_awake_next_interval_{0};
   
-  // Telephony state
-  bool muted_{false};
-  bool off_hook_{false};
-  bool ringing_{false};
-  bool hold_{false};
+  // Telephony state the host reports via LED output reports. Written on the
+  // TinyUSB task, so these are atomic and the automations run from loop().
+  std::atomic<bool> muted_{false};
+  std::atomic<bool> off_hook_{false};
+  std::atomic<bool> ringing_{false};
+  std::atomic<bool> hold_{false};
+  std::atomic<bool> host_state_known_{false};
+  std::atomic<bool> led_state_dirty_{false};
+  // Raw byte from the last LED report, kept so loop() can log it verbatim.
+  std::atomic<uint8_t> last_led_report_{0};
+
+  // Last states published to entities, compared in loop() to spot changes.
+  bool published_muted_{false};
+  bool published_off_hook_{false};
+  bool published_ringing_{false};
+
+  // Button states we send to the host.
   bool hook_button_{false};
   bool mute_button_{false};
-  
+
   void send_telephony_report();
+  // One mute button press/release pulse, scheduled rather than delay()ed.
+  void send_mute_pulse_(bool telephony, bool consumer);
+  void send_consumer_pulse_(uint8_t bit, const char *name);
+  void publish_telephony_state_();
+
+  // type() runs from loop() one keystroke at a time, so typing a long string no
+  // longer blocks every other component for its whole duration.
+  void type_loop_();
+  std::string type_text_;
+  size_t type_index_{0};
+  uint32_t type_speed_ms_{50};
+  uint32_t type_jitter_ms_{0};
+  uint32_t type_next_time_{0};
+  bool type_key_down_{false};
   
   // Telephony callbacks
   CallbackManager<void(bool)> mute_callbacks_;
   CallbackManager<void(bool)> off_hook_callbacks_;
   CallbackManager<void(bool)> ring_callbacks_;
   CallbackManager<void(bool)> hold_callbacks_;
+
+#ifdef USE_HID_COMPOSITE_LAMP_ARRAY
+  // LampArray state
+  lamp_array_core::LampArrayCore lamp_array_;
+  bool lamp_array_connected_{false};
+  // Only diff frames when something actually listens for per-lamp updates.
+  bool want_lamp_updates_{false};
+  uint32_t last_lamp_frame_{0};
+  std::vector<lamp_array_core::LampColor> lamp_incoming_;
+  std::vector<lamp_array_core::LampColor> lamp_published_;
+
+  CallbackManager<void(uint16_t, Color)> lamp_update_callbacks_;
+  CallbackManager<void(bool)> autonomous_callbacks_;
+
+  void setup_lamp_array_();
+  void loop_lamp_array_();
+#endif
 };
+
+#ifdef USE_HID_COMPOSITE_LAMP_ARRAY
+// Folds the LampArray intensity channel into an RGB colour. With a single
+// intensity level the channel is an on/off gate, which is what Windows expects
+// from the Microsoft reference devices; with more levels it scales.
+Color lamp_color_to_esphome(const lamp_array_core::LampColor &color, uint8_t intensity_levels);
+
+class LampUpdateTrigger : public Trigger<uint16_t, Color> {
+ public:
+  explicit LampUpdateTrigger(HIDComposite *parent) {
+    parent->add_on_lamp_update_callback([this](uint16_t lamp_id, Color color) { this->trigger(lamp_id, color); });
+  }
+};
+
+class AutonomousModeTrigger : public Trigger<bool> {
+ public:
+  explicit AutonomousModeTrigger(HIDComposite *parent) {
+    parent->add_on_autonomous_mode_callback([this](bool autonomous) { this->trigger(autonomous); });
+  }
+};
+#endif
 
 // ============ Mouse Action Templates ============
 

@@ -8,7 +8,10 @@
 
 #include <string>
 
-#if defined(CONFIG_IDF_TARGET_ESP32S3) || defined(CONFIG_IDF_TARGET_ESP32S2)
+// Chips with native USB OTG (ESP32-S2, S3, P4). Ask the SoC caps header rather
+// than listing targets, so every HID component agrees on the same test.
+#include <soc/soc_caps.h>
+#if SOC_USB_OTG_SUPPORTED
 #define HID_KEYBOARD_SUPPORTED
 #endif
 
@@ -71,6 +74,17 @@ class HIDKeyboard : public Component {
   void char_to_keycode_qwertz(char c, uint8_t &keycode, uint8_t &modifier);
   uint8_t key_name_to_keycode(const std::string &key);
   void send_report(uint8_t modifier, uint8_t keycode);
+
+  // type() runs from loop() one keystroke at a time, so typing a long string no
+  // longer blocks every other component for its whole duration.
+  void type_loop_();
+  std::string type_text_;
+  size_t type_index_{0};
+  uint32_t type_speed_ms_{50};
+  uint32_t type_jitter_ms_{0};
+  uint32_t type_next_time_{0};
+  bool type_key_down_{false};
+
   
   // Keep awake state
   bool keep_awake_enabled_{false};

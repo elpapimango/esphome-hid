@@ -1,15 +1,19 @@
 import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome import automation
-from esphome.const import CONF_ID
+from esphome.components.light.effects import register_addressable_effect
+from esphome.components.light.types import AddressableLightEffect
+from esphome.const import CONF_EFFECTS, CONF_ID, CONF_LIGHT, CONF_NAME, CONF_OFFSET
+import esphome.final_validate as fv
 
 CODEOWNERS = ["@AntorFr"]
 DEPENDENCIES = ["esp32"]
-CONFLICTS_WITH = ["hid_mouse", "hid_keyboard", "hid_telephony"]
+CONFLICTS_WITH = ["hid_mouse", "hid_keyboard", "hid_telephony", "hid_lamp_array"]
 
 CONF_LAYOUT = "layout"
 
 hid_composite_ns = cg.esphome_ns.namespace("hid_composite")
+Color = cg.esphome_ns.class_("Color")
 HIDComposite = hid_composite_ns.class_("HIDComposite", cg.Component)
 
 # Keyboard layout enum
@@ -101,15 +105,223 @@ def validate_modifiers(value):
         raise cv.Invalid(f"Unknown modifier: {value}")
     raise cv.Invalid(f"Invalid modifier type: {type(value)}")
 
+# ============ LampArray (Windows Dynamic Lighting) ============
+# Optional: adds report IDs 6-11 to the composite descriptor so the PC can push
+# per-lamp colours to us. Kept in sync with the hid_lamp_array component.
+
+LampArrayLightEffect = hid_composite_ns.class_(
+    "LampArrayLightEffect", AddressableLightEffect
+)
+LampUpdateTrigger = hid_composite_ns.class_(
+    "LampUpdateTrigger", automation.Trigger.template(cg.uint16, Color)
+)
+AutonomousModeTrigger = hid_composite_ns.class_(
+    "AutonomousModeTrigger", automation.Trigger.template(cg.bool_)
+)
+
+CONF_LAMP_ARRAY = "lamp_array"
+CONF_HID_COMPOSITE_ID = "hid_composite_id"
+CONF_LAMP_COUNT = "lamp_count"
+CONF_KIND = "kind"
+CONF_WIDTH = "width"
+CONF_HEIGHT = "height"
+CONF_DEPTH = "depth"
+CONF_ROWS = "rows"
+CONF_MIN_UPDATE_INTERVAL = "min_update_interval"
+CONF_UPDATE_LATENCY = "update_latency"
+CONF_PURPOSES = "purposes"
+CONF_INTENSITY_LEVELS = "intensity_levels"
+CONF_LAMPS = "lamps"
+CONF_Z = "z"
+CONF_ON_LAMP_UPDATE = "on_lamp_update"
+CONF_ON_AUTONOMOUS_MODE = "on_autonomous_mode"
+
+# LampArrayKind, HID Usage Tables 1.4. Tells the host what it is lighting up.
+LAMP_ARRAY_KINDS = {
+    "KEYBOARD": 1,
+    "MOUSE": 2,
+    "GAME_CONTROLLER": 3,
+    "PERIPHERAL": 4,
+    "SCENE": 5,
+    "NOTIFICATION": 6,
+    "CHASSIS": 7,
+    "WEARABLE": 8,
+    "FURNITURE": 9,
+    "ART": 10,
+}
+
+# LampPurposes bitfield.
+LAMP_PURPOSES = {
+    "CONTROL": 0x01,
+    "ACCENT": 0x02,
+    "BRANDING": 0x04,
+    "STATUS": 0x08,
+    "ILLUMINATION": 0x10,
+    "PRESENTATION": 0x20,
+}
+
+
+def validate_purposes(value):
+    value = cv.ensure_list(cv.one_of(*LAMP_PURPOSES, upper=True))(value)
+    if not value:
+        raise cv.Invalid("At least one purpose is required")
+    mask = 0
+    for purpose in value:
+        mask |= LAMP_PURPOSES[purpose]
+    return mask
+
+
+# Positions are millimetres on the wire (converted to micrometres in C++), so
+# accept plain numbers and distance strings alike.
+def millimeters(value):
+    if isinstance(value, str):
+        value = value.strip()
+        for suffix, factor in (("mm", 1), ("cm", 10), ("m", 1000)):
+            if value.endswith(suffix):
+                return int(float(value[: -len(suffix)].strip()) * factor)
+    return cv.uint32_t(value)
+
+
+LAMP_SCHEMA = cv.Schema({
+    cv.Required(CONF_X): millimeters,
+    cv.Required(CONF_Y): millimeters,
+    cv.Optional(CONF_Z, default=0): millimeters,
+    cv.Optional(CONF_PURPOSES): validate_purposes,
+})
+
+
+def validate_lamp_list(config):
+    lamps = config.get(CONF_LAMPS)
+    if lamps is not None and len(lamps) != config[CONF_LAMP_COUNT]:
+        raise cv.Invalid(
+            f"'{CONF_LAMPS}' has {len(lamps)} entries but "
+            f"'{CONF_LAMP_COUNT}' is {config[CONF_LAMP_COUNT]}"
+        )
+    if config[CONF_ROWS] > config[CONF_LAMP_COUNT]:
+        raise cv.Invalid(f"'{CONF_ROWS}' cannot exceed '{CONF_LAMP_COUNT}'")
+    # A zero-size bounding box makes the host place every lamp at the origin,
+    # which breaks its spatial effects, so insist on real measurements.
+    if config[CONF_WIDTH] == 0 and config[CONF_HEIGHT] == 0:
+        raise cv.Invalid(
+            f"Set at least one of '{CONF_WIDTH}' or '{CONF_HEIGHT}' to the "
+            "physical size of the lamp area"
+        )
+    return config
+
+
+# Two colour caches at 4 bytes/lamp plus the host's own bookkeeping, so cap the
+# count well below the 65535 the descriptor allows.
+LAMP_ARRAY_SCHEMA = cv.All(cv.Schema({
+    cv.Required(CONF_LAMP_COUNT): cv.int_range(min=1, max=1024),
+    cv.Optional(CONF_KIND, default="PERIPHERAL"): cv.enum(LAMP_ARRAY_KINDS, upper=True),
+    cv.Optional(CONF_WIDTH, default=0): millimeters,
+    cv.Optional(CONF_HEIGHT, default=0): millimeters,
+    cv.Optional(CONF_DEPTH, default=0): millimeters,
+    cv.Optional(CONF_ROWS, default=1): cv.int_range(min=1, max=1024),
+    cv.Optional(CONF_MIN_UPDATE_INTERVAL, default="33ms"): cv.positive_time_period_milliseconds,
+    cv.Optional(CONF_UPDATE_LATENCY, default="33ms"): cv.positive_time_period_milliseconds,
+    cv.Optional(CONF_PURPOSES, default=["ACCENT"]): validate_purposes,
+    cv.Optional(CONF_INTENSITY_LEVELS, default=1): cv.int_range(min=1, max=255),
+    cv.Optional(CONF_LAMPS): cv.ensure_list(LAMP_SCHEMA),
+    cv.Optional(CONF_ON_LAMP_UPDATE): automation.validate_automation(
+        {cv.GenerateID(CONF_ID): cv.declare_id(LampUpdateTrigger)}
+    ),
+    cv.Optional(CONF_ON_AUTONOMOUS_MODE): automation.validate_automation(
+        {cv.GenerateID(CONF_ID): cv.declare_id(AutonomousModeTrigger)}
+    ),
+}), validate_lamp_list)
+
 CONFIG_SCHEMA = cv.Schema({
     cv.GenerateID(): cv.declare_id(HIDComposite),
     cv.Optional(CONF_LAYOUT, default="QWERTY_US"): cv.enum(KEYBOARD_LAYOUTS, upper=True),
+    cv.Optional(CONF_LAMP_ARRAY): LAMP_ARRAY_SCHEMA,
 }).extend(cv.COMPONENT_SCHEMA)
+
+
+def _final_validate(config):
+    """Reject the lamp_array light effect when no lamps are configured.
+
+    Without lamp_array: the descriptor carries no lamp reports and the effect
+    class is not compiled, so catch it here rather than in the C++ build.
+    """
+    if CONF_LAMP_ARRAY in config:
+        return
+
+    full_config = fv.full_config.get()
+    for light_conf in full_config.get(CONF_LIGHT, []):
+        for effect in light_conf.get(CONF_EFFECTS, []):
+            if "lamp_array" in effect:
+                raise cv.Invalid(
+                    "The 'lamp_array' light effect requires a 'lamp_array:' "
+                    "block under 'hid_composite:'"
+                )
+
+
+FINAL_VALIDATE_SCHEMA = _final_validate
+
 
 async def to_code(config):
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
     cg.add(var.set_layout(config[CONF_LAYOUT]))
+
+    lamp_array = config.get(CONF_LAMP_ARRAY)
+    if lamp_array is None:
+        return
+
+    # Gates the descriptor block, the report handlers and the light effect.
+    cg.add_define("USE_HID_COMPOSITE_LAMP_ARRAY")
+
+    core = var.core()
+    cg.add(core.set_lamp_count(lamp_array[CONF_LAMP_COUNT]))
+    cg.add(core.set_bounding_box_mm(
+        lamp_array[CONF_WIDTH], lamp_array[CONF_HEIGHT], lamp_array[CONF_DEPTH]
+    ))
+    cg.add(core.set_rows(lamp_array[CONF_ROWS]))
+    cg.add(core.set_kind(lamp_array[CONF_KIND]))
+    cg.add(core.set_min_update_interval_ms(
+        lamp_array[CONF_MIN_UPDATE_INTERVAL].total_milliseconds
+    ))
+    cg.add(core.set_update_latency_ms(
+        lamp_array[CONF_UPDATE_LATENCY].total_milliseconds
+    ))
+    cg.add(core.set_default_purposes(lamp_array[CONF_PURPOSES]))
+    cg.add(core.set_intensity_levels(lamp_array[CONF_INTENSITY_LEVELS]))
+    for lamp in lamp_array.get(CONF_LAMPS, []):
+        cg.add(core.add_lamp(
+            lamp[CONF_X],
+            lamp[CONF_Y],
+            lamp[CONF_Z],
+            lamp.get(CONF_PURPOSES, lamp_array[CONF_PURPOSES]),
+            0,
+        ))
+
+    for conf in lamp_array.get(CONF_ON_LAMP_UPDATE, []):
+        trigger = cg.new_Pvariable(conf[CONF_ID], var)
+        await automation.build_automation(
+            trigger, [(cg.uint16, "lamp_id"), (Color, "color")], conf
+        )
+    for conf in lamp_array.get(CONF_ON_AUTONOMOUS_MODE, []):
+        trigger = cg.new_Pvariable(conf[CONF_ID], var)
+        await automation.build_automation(trigger, [(cg.bool_, "autonomous")], conf)
+
+
+@register_addressable_effect(
+    "lamp_array",
+    LampArrayLightEffect,
+    "LampArray",
+    {
+        cv.GenerateID(CONF_HID_COMPOSITE_ID): cv.use_id(HIDComposite),
+        cv.Optional(CONF_OFFSET, default=0): cv.int_range(min=0, max=65535),
+    },
+)
+async def lamp_array_light_effect_to_code(config, effect_id):
+    parent = await cg.get_variable(config[CONF_HID_COMPOSITE_ID])
+
+    effect = cg.new_Pvariable(effect_id, config[CONF_NAME])
+    cg.add(effect.set_lamp_array(parent))
+    cg.add(effect.set_offset(config[CONF_OFFSET]))
+    return effect
 
 # ============ Mouse Actions ============
 

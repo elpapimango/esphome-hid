@@ -1,0 +1,71 @@
+# USB HID LampArray: Windows 11 Dynamic Lighting drives a WS2812 strip.
+#
+# Windows > Settings > Personalization > Dynamic Lighting lists the device once
+# it has walked the lamp geometry over USB.
+
+esphome:
+  name: test-lamp-array
+  platformio_options:
+    build_flags:
+      - -DCFG_TUD_HID=1
+      # A LampArray multi-update report is 51 bytes with its report ID and has
+      # to fit TinyUSB's HID buffer.
+      - -DCFG_TUD_HID_EP_BUFSIZE=64
+
+esp32:
+  board: esp32-s3-devkitc-1
+  framework:
+    type: esp-idf
+    sdkconfig_options:
+      CONFIG_USJ_ENABLE_USB_SERIAL_JTAG: "n"
+      CONFIG_TINYUSB_HID_COUNT: "1"
+      CONFIG_ESP_CONSOLE_UART_DEFAULT: "y"
+    components:
+      - espressif/esp_tinyusb~2.0.0
+
+logger:
+  hardware_uart: UART0
+
+external_components:
+  - source:
+      type: local
+      path: ../components
+    components: [hid_lamp_array]
+
+hid_lamp_array:
+  id: my_lamps
+  lamp_count: 24
+  kind: PERIPHERAL
+  # Physical extent of the strip. The host uses this for spatial effects, so
+  # measure it rather than guessing.
+  width: 460mm
+  height: 10mm
+  depth: 10mm
+  rows: 1
+  purposes: [ACCENT]
+  min_update_interval: 33ms
+
+# The effect renders host colours while Windows drives the device, and falls
+# back to the light's own colour when it does not.
+light:
+  - platform: esp32_rmt_led_strip
+    id: strip
+    name: "Strip"
+    pin: GPIO48
+    num_leds: 24
+    rgb_order: GRB
+    chipset: ws2812
+    effects:
+      - lamp_array:
+          lamp_array_id: my_lamps
+          offset: 0
+      - random:
+
+binary_sensor:
+  - platform: hid_lamp_array
+    type: connected
+    name: "PC Connected"
+
+  - platform: hid_lamp_array
+    type: autonomous
+    name: "Lighting Self-Controlled"

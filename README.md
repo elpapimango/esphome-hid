@@ -1,6 +1,6 @@
 # ESPHome HID Components
 
-ESPHome external components to simulate USB HID devices (mouse, keyboard, telephony) on ESP32-S3.
+ESPHome external components to simulate USB HID devices (mouse, keyboard, telephony, LampArray) on ESP32-S3.
 
 ## Components
 
@@ -8,8 +8,9 @@ ESPHome external components to simulate USB HID devices (mouse, keyboard, teleph
 |-----------|-------------|
 | `hid_mouse` | USB HID Mouse only |
 | `hid_keyboard` | USB HID Keyboard only |
-| `hid_composite` | USB HID Mouse + Keyboard + Telephony combined |
+| `hid_composite` | USB HID Mouse + Keyboard + Telephony (+ optional LampArray) combined |
 | `hid_telephony` | USB HID Telephony only (mute/call control) |
+| `hid_lamp_array` | USB HID LampArray only (Windows Dynamic Lighting) |
 
 > **Note**: These components are mutually exclusive. Use only ONE of them in your configuration.
 
@@ -18,7 +19,7 @@ ESPHome external components to simulate USB HID devices (mouse, keyboard, teleph
 ### Mouse (`hid_mouse` or `hid_composite`)
 - Relative cursor movements (X, Y)
 - Left, right, and middle buttons
-- Vertical and horizontal scroll wheel
+- Vertical scroll wheel; horizontal scroll (AC Pan) on `hid_composite` only
 - Keep awake (prevents PC sleep)
 
 ### Keyboard (`hid_keyboard` or `hid_composite`)
@@ -35,6 +36,14 @@ ESPHome external components to simulate USB HID devices (mouse, keyboard, teleph
 - **Bidirectional sync**: PC mute state is reflected in Home Assistant
 - Binary sensors for call state (in_call, ringing)
 - Switch component for mute control
+
+### LampArray (`hid_lamp_array` or `hid_composite`)
+- Windows 11 Dynamic Lighting support (any app using `Windows.Devices.Lights`)
+- Host pushes per-lamp RGB + intensity; the device renders it
+- Renders straight onto any ESPHome addressable light via the `lamp_array` effect
+- Lamp geometry declared in millimetres, auto-gridded or listed per lamp
+- Autonomous-mode signal so device-side effects take over when the host lets go
+- `on_lamp_update` / `on_autonomous_mode` automations for non-LED targets
 
 ### Connection Status
 All components provide:
@@ -90,6 +99,9 @@ esphome:
   platformio_options:
     build_flags:
       - -DCFG_TUD_HID=1
+      # Only needed for LampArray: a multi-update report is 51 bytes with its
+      # report ID and has to fit TinyUSB's HID buffer.
+      - -DCFG_TUD_HID_EP_BUFSIZE=64
 
 esp32:
   board: esp32-s3-devkitc-1
@@ -117,7 +129,7 @@ hid_mouse:
 | `hid_mouse.press` | Press button |
 | `hid_mouse.release` | Release button |
 | `hid_mouse.release_all` | Release all buttons |
-| `hid_mouse.scroll` | Scroll (vertical, horizontal) |
+| `hid_mouse.scroll` | Scroll wheel (`amount`: -127 to 127). Vertical only; use `hid_composite.scroll` for horizontal |
 
 ## Keyboard Actions
 
@@ -144,10 +156,15 @@ The `layout` option configures the keyboard mapping for the `type` action. This 
 | `AZERTY_FR` | French AZERTY |
 | `QWERTZ_DE` | German QWERTZ |
 
-> **Note**: The layout only affects the `type` action. Actions like `press`, `tap` send raw scancodes and work regardless of PC keyboard settings.
+> **Note**: The layout affects `type`, and also `press`/`tap` when `key` is a
+> single character (those go through the same character mapping). Multi-character
+> key names (`ENTER`, `F15`, `TAB`, ...) are raw scancodes and are layout-independent.
 
 ### Special Keys
-ENTER, ESC, BACKSPACE, TAB, SPACE, DELETE, INSERT, HOME, END, PAGEUP, PAGEDOWN, UP, DOWN, LEFT, RIGHT, F1-F12
+ENTER, ESC, BACKSPACE, TAB, SPACE, DELETE, INSERT, HOME, END, PAGEUP, PAGEDOWN, UP, DOWN, LEFT, RIGHT, F1-F24
+
+> F13-F24 have no keycaps on normal keyboards, which makes F15 the usual
+> keep-awake key: the PC registers activity but nothing visible happens.
 
 ### Modifiers
 NONE, CTRL, SHIFT, ALT, GUI (WIN/CMD), CTRL_SHIFT, CTRL_ALT, CTRL_GUI, etc.
@@ -195,20 +212,91 @@ hid_telephony:
 
 | Action | Description |
 |--------|-------------|
-| `hid_telephony.mute` | Send mute button press |
-| `hid_telephony.unmute` | Send unmute button press |
-| `hid_telephony.toggle_mute` | Toggle mute state |
+| `hid_telephony.mute` | Mute, unless the PC already reports muted |
+| `hid_telephony.unmute` | Unmute, unless the PC already reports unmuted |
+| `hid_telephony.toggle_mute` | Always send one mute button press |
 | `hid_telephony.answer` | Answer incoming call |
 | `hid_telephony.hang_up` | End current call |
+
+## LampArray
+
+LampArray is the one HID feature that runs host -> device: Windows sends colours,
+the ESP renders them. Everything is carried on Feature reports, so no input
+actions exist for it.
+
+```yaml
+hid_lamp_array:
+  id: my_lamps
+  lamp_count: 24            # 1-1024
+  kind: PERIPHERAL          # KEYBOARD, MOUSE, GAME_CONTROLLER, PERIPHERAL, SCENE,
+                            # NOTIFICATION, CHASSIS, WEARABLE, FURNITURE, ART
+  width: 460mm              # bounding box; the host uses it for spatial effects
+  height: 10mm
+  depth: 10mm
+  rows: 1                   # lamps are auto-gridded across the bounding box
+  purposes: [ACCENT]        # CONTROL, ACCENT, BRANDING, STATUS, ILLUMINATION, PRESENTATION
+  min_update_interval: 33ms
+  update_latency: 33ms
+  intensity_levels: 1       # 1 = intensity is an on/off gate (what Windows expects)
+  lamps:                    # optional; overrides the grid, must match lamp_count
+    - {x: 0mm, y: 0mm, purposes: [STATUS]}
+    - {x: 19mm, y: 0mm}
+  on_lamp_update:
+    - lambda: 'ESP_LOGD("lamps", "%u -> %02X%02X%02X", lamp_id, color.r, color.g, color.b);'
+  on_autonomous_mode:
+    - lambda: 'ESP_LOGD("lamps", "host released control: %d", autonomous);'
+```
+
+Under `hid_composite` the same block nests one level down and takes report IDs
+6-11:
+
+```yaml
+hid_composite:
+  id: my_hid
+  lamp_array:
+    lamp_count: 12
+    kind: KEYBOARD
+    rows: 3
+```
+
+> **Note**: enabling LampArray on `hid_composite` changes the report descriptor,
+> so the device enumerates under PID `0x4007` rather than `0x4004`. Windows caches
+> descriptors per VID/PID, so this avoids a stale cache.
+
+### Rendering on an addressable light
+
+```yaml
+light:
+  - platform: esp32_rmt_led_strip
+    id: strip
+    num_leds: 24
+    # ...
+    effects:
+      - lamp_array:
+          lamp_array_id: my_lamps   # hid_composite_id: my_hid, for the composite
+          offset: 0                 # first lamp id shown on LED 0
+```
+
+Select the effect and Windows drives the strip. While the host has *not* claimed
+the lamps (autonomous mode) the effect paints the light's own colour instead, so
+it is safe to leave selected permanently.
 
 ## Binary Sensors
 
 ### Connection Status (all components)
 ```yaml
 binary_sensor:
-  - platform: hid_composite  # or hid_mouse, hid_keyboard, hid_telephony
+  - platform: hid_composite  # or hid_mouse, hid_keyboard, hid_telephony, hid_lamp_array
     type: connected
     name: "PC Connected"
+```
+
+### LampArray Status (hid_lamp_array)
+```yaml
+binary_sensor:
+  - platform: hid_lamp_array
+    type: autonomous
+    name: "Lighting Self-Controlled"
 ```
 
 ### Telephony Status (hid_composite or hid_telephony)
@@ -249,7 +337,13 @@ switch:
     name: "Mute"
 ```
 
-> **Note**: The mute switch syncs bidirectionally with the PC. If mute is toggled via Teams/Zoom, the switch updates automatically.
+> **Note**: The mute switch syncs bidirectionally with the PC. If mute is toggled
+> via Teams/Zoom, the switch updates automatically.
+>
+> The mute button is a toggle on the USB wire, so `mute`/`unmute` compare against
+> the state the PC last reported and send nothing when it already matches. Until
+> the PC has sent its first state report there is nothing to compare against, so
+> the first press is sent unconditionally. `toggle_mute` always sends a press.
 
 ## Examples
 
@@ -259,7 +353,10 @@ See the [examples](examples/) folder:
 - [composite.yaml](examples/composite.yaml) - Mouse + Keyboard
 - [test_composite_switch.yaml](examples/test_composite_switch.yaml) - Composite with switches
 - [test_telephony.yaml](examples/test_telephony.yaml) - Telephony controls
+- [lamp_array.yaml](examples/lamp_array.yaml) - LampArray driving a WS2812 strip
+- [composite_lamp_array.yaml](examples/composite_lamp_array.yaml) - Mouse + Keyboard + LampArray
 
 ## License
 
-MIT License
+MIT License. LampArray support derives from Microsoft's MIT-licensed
+reference samples; see [NOTICE.md](NOTICE.md).

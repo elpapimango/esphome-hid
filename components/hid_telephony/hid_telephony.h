@@ -5,9 +5,13 @@
 
 #ifdef USE_ESP32
 
+#include <atomic>
 #include <functional>
 
-#if defined(CONFIG_IDF_TARGET_ESP32S3) || defined(CONFIG_IDF_TARGET_ESP32S2)
+// Chips with native USB OTG (ESP32-S2, S3, P4). Ask the SoC caps header rather
+// than listing targets, so every HID component agrees on the same test.
+#include <soc/soc_caps.h>
+#if SOC_USB_OTG_SUPPORTED
 #define HID_TELEPHONY_SUPPORTED
 #endif
 
@@ -21,24 +25,29 @@ class HIDTelephony : public Component {
   void dump_config() override;
   float get_setup_priority() const override { return setup_priority::AFTER_WIFI; }
 
-  // Mute control - envoie les deux rapports (Telephony + Consumer)
-  void mute();
-  void unmute();
-  void toggle_mute();
-  
+  // Mute control. The mute button is a toggle on the wire, so these drive the
+  // PC towards the requested state using the mute state it last reported.
+  void mute();        // Mute if not already muted
+  void unmute();      // Unmute if currently muted
+  void toggle_mute();  // Unconditional toggle press
+  void set_mute(bool state);
+
   // Mute control séparé pour test
   void mute_telephony();   // Envoie uniquement le rapport Telephony (0x0B)
   void mute_consumer();    // Envoie uniquement le rapport Consumer (0x0C)
-  
+
   // Call control
   void hook_switch();  // Toggle off-hook/on-hook
   void answer();       // Go off-hook (answer call)
   void hang_up();      // Go on-hook (end call)
-  
-  // State getters
-  bool is_muted() const { return this->muted_; }
-  bool is_off_hook() const { return this->off_hook_; }
-  bool is_ringing() const { return this->ringing_; }
+
+  // State getters. Written from the TinyUSB task, read from the ESPHome loop.
+  bool is_muted() const { return this->muted_.load(); }
+  bool is_off_hook() const { return this->off_hook_.load(); }
+  bool is_ringing() const { return this->ringing_.load(); }
+  // True once the host has sent at least one LED report, i.e. the states above
+  // reflect the PC rather than our defaults.
+  bool host_state_known() const { return this->host_state_known_.load(); }
   bool is_connected();
   bool is_ready();
   
@@ -59,25 +68,35 @@ class HIDTelephony : public Component {
  protected:
   void send_report_();
   void send_consumer_mute_();
-  
+  // One mute button press/release pulse, scheduled rather than delay()ed.
+  void send_mute_pulse_(bool telephony, bool consumer);
+
   bool initialized_{false};
-  
+
   // Button states (what we send to host)
   bool mute_button_{false};
   bool hook_button_{false};
-  
-  // LED states (what host tells us)
-  bool muted_{false};
-  bool off_hook_{false};
-  bool ringing_{false};
-  bool hold_{false};
-  
+
+  // LED states (what the host tells us). Written on the TinyUSB task, so these
+  // are atomic and the matching automations run from loop() instead.
+  std::atomic<bool> muted_{false};
+  std::atomic<bool> off_hook_{false};
+  std::atomic<bool> ringing_{false};
+  std::atomic<bool> hold_{false};
+  std::atomic<bool> host_state_known_{false};
+  std::atomic<bool> led_state_dirty_{false};
+  // Raw byte from the last LED report, kept so loop() can log it verbatim.
+  std::atomic<uint8_t> last_led_report_{0};
+
+  // Last states published to entities, compared in loop() to spot changes.
+  bool published_muted_{false};
+  bool published_off_hook_{false};
+  bool published_ringing_{false};
+
   // Callbacks
   CallbackManager<void(bool)> mute_callbacks_;
   CallbackManager<void(bool)> off_hook_callbacks_;
   CallbackManager<void(bool)> ring_callbacks_;
-  
-  friend void telephony_set_report_callback(uint8_t const *buffer, uint16_t bufsize);
 };
 
 // Global instance for callbacks
