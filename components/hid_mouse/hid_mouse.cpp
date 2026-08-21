@@ -302,11 +302,9 @@ bool HIDMouse::is_ready() {
 }  // namespace hid_mouse
 }  // namespace esphome
 
-#endif  // HID_MOUSE_SUPPORTED
+#else  // HID_MOUSE_SUPPORTED
 
-#else  // USE_ESP32
-
-// Stubs for non-ESP32 platforms
+// Stubs for ESP32 variants without USB OTG (and non-ESP32 platforms)
 namespace esphome {
 namespace hid_mouse {
 void HIDMouse::setup() {}
@@ -325,4 +323,5 @@ bool HIDMouse::is_ready() { return false; }
 }  // namespace hid_mouse
 }  // namespace esphome
 
+#endif  // HID_MOUSE_SUPPORTED
 #endif  // USE_ESP32
