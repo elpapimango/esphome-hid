@@ -368,6 +368,9 @@ void HIDTelephony::mute_telephony() {
   delay(50);
   this->mute_button_ = false;
   this->send_report_();
+  // Assume the toggle took effect, same as toggle_mute() - otherwise a host
+  // that never echoes the Telephony LED leaves muted_ stuck forever.
+  this->set_muted_(!this->muted_);
 }
 
 void HIDTelephony::mute_consumer() {
@@ -377,6 +380,7 @@ void HIDTelephony::mute_consumer() {
   delay(50);
   this->mute_button_ = false;
   this->send_consumer_mute_();
+  this->set_muted_(!this->muted_);
 }
 
 void HIDTelephony::send_keyboard_report_(uint8_t modifier, uint8_t keycode) {
@@ -393,6 +397,7 @@ void HIDTelephony::mute_teams() {
   this->send_keyboard_report_(modifier, keycode);
   delay(50);
   this->send_keyboard_report_(0, 0);  // Release
+  this->set_muted_(!this->muted_);
 }
 
 void HIDTelephony::volume_up() {

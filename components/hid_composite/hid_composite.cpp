@@ -755,32 +755,37 @@ void HIDComposite::mute_telephony() {
   delay(50);
   this->mute_button_ = false;
   this->send_telephony_report();
+  // Assume the toggle took effect, same as toggle_mute() - otherwise a host
+  // that never echoes the Telephony LED leaves muted_ stuck forever.
+  this->set_muted_(!this->muted_);
 }
 
 void HIDComposite::mute_consumer() {
   if (!this->initialized_ || !tud_mounted() || !tud_hid_ready()) return;
-  
+
   ESP_LOGI(TAG, "Sending Consumer Mute (system volume mute)");
-  
+
   // Consumer Control report: bit 0 = Mute
   uint8_t report = 0x01;  // Mute pressed
   tud_hid_report(REPORT_ID_CONSUMER, &report, sizeof(report));
   delay(50);
   report = 0x00;  // Mute released
   tud_hid_report(REPORT_ID_CONSUMER, &report, sizeof(report));
+  this->set_muted_(!this->muted_);
 }
 
 void HIDComposite::mute_teams() {
   // Teams shortcut: Ctrl+Shift+M (Windows) or Cmd+Shift+M (Mac)
   ESP_LOGI(TAG, "Sending Teams mute shortcut (Ctrl+Shift+M)");
-  
+
   // Modifier: Ctrl (0x01) + Shift (0x02) = 0x03
   uint8_t modifier = 0x03;  // Left Ctrl + Left Shift
   uint8_t keycode = 0x10;   // 'M' key
-  
+
   this->send_keyboard_report(modifier, keycode);
   delay(50);
   this->send_keyboard_report(0, 0);  // Release
+  this->set_muted_(!this->muted_);
 }
 
 void HIDComposite::volume_up() {
@@ -843,6 +848,12 @@ void HIDComposite::process_host_report(uint8_t report_id, uint8_t const *buffer,
       this->ringing_ = new_ringing;
       ESP_LOGI(TAG, "Ring state changed: %s", new_ringing ? "RINGING" : "NOT RINGING");
       this->ring_callbacks_.call(new_ringing);
+    }
+
+    if (new_hold != this->hold_) {
+      this->hold_ = new_hold;
+      ESP_LOGI(TAG, "Hold state changed: %s", new_hold ? "ON HOLD" : "NOT ON HOLD");
+      this->hold_callbacks_.call(new_hold);
     }
   } else if (report_id == REPORT_ID_KEYBOARD) {
     // Keyboard LED report (Num Lock, Caps Lock, etc)

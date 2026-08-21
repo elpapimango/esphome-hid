@@ -317,6 +317,7 @@ void HIDMouse::click(MouseButton button) {}
 void HIDMouse::press(MouseButton button) {}
 void HIDMouse::release(MouseButton button) {}
 void HIDMouse::scroll(int8_t amount) {}
+void HIDMouse::send_report_() {}
 void HIDMouse::start_keep_awake(uint32_t interval_ms, uint32_t jitter_ms) {}
 void HIDMouse::stop_keep_awake() {}
 bool HIDMouse::is_connected() { return false; }
