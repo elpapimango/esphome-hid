@@ -347,13 +347,14 @@ void HIDTelephony::process_host_report(uint8_t const *buffer, uint16_t bufsize) 
 }
 
 void HIDTelephony::set_muted_(bool muted) {
+  this->mute_state_known_ = true;
   if (muted == this->muted_) return;
   this->muted_ = muted;
   this->mute_callbacks_.call(muted);
 }
 
 void HIDTelephony::mute() {
-  if (this->muted_) {
+  if (this->mute_state_known_ && this->muted_) {
     ESP_LOGD(TAG, "Already muted, not sending mute toggle");
     return;
   }
@@ -415,7 +416,7 @@ void HIDTelephony::volume_down() {
 }
 
 void HIDTelephony::unmute() {
-  if (!this->muted_) {
+  if (this->mute_state_known_ && !this->muted_) {
     ESP_LOGD(TAG, "Already unmuted, not sending mute toggle");
     return;
   }

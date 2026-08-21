@@ -673,13 +673,14 @@ bool HIDComposite::is_ready() {
 // ============ Telephony Functions (Poly BT700 Compatible) ============
 
 void HIDComposite::set_muted_(bool muted) {
+  this->mute_state_known_ = true;
   if (muted == this->muted_) return;
   this->muted_ = muted;
   this->mute_callbacks_.call(muted);
 }
 
 void HIDComposite::mute() {
-  if (this->muted_) {
+  if (this->mute_state_known_ && this->muted_) {
     ESP_LOGD(TAG, "Already muted, not sending mute toggle");
     return;
   }
@@ -687,7 +688,7 @@ void HIDComposite::mute() {
 }
 
 void HIDComposite::unmute() {
-  if (!this->muted_) {
+  if (this->mute_state_known_ && !this->muted_) {
     ESP_LOGD(TAG, "Already unmuted, not sending mute toggle");
     return;
   }

@@ -77,6 +77,10 @@ class HIDTelephony : public Component {
   
   // LED states (what host tells us)
   bool muted_{false};
+  // False until set_muted_() has run at least once (from a host LED report or
+  // our own optimistic guess). While false, muted_ is just its zero-init
+  // default, not a real observation, so mute()/unmute() must not trust it.
+  bool mute_state_known_{false};
   bool off_hook_{false};
   bool ringing_{false};
   bool hold_{false};

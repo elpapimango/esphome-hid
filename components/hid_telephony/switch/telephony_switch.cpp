@@ -22,14 +22,17 @@ void MuteSwitch::dump_config() {
 
 void MuteSwitch::write_state(bool state) {
   // mute()/unmute() no-op if already in the requested state, so this is safe
-  // to call even if a previous toggle never got confirmed by the host.
-  // The actual state update (and publish_state) comes from the mute callback,
-  // fired either optimistically here or when the PC reports its real state.
+  // to call even if a previous toggle never got confirmed by the host. Publish
+  // here rather than relying solely on the mute callback: mute()/unmute() can
+  // legitimately no-op (state already matches), and then the callback never
+  // fires, which would otherwise leave the switch stuck on the old state. A
+  // later host LED report, if any, still corrects this through the callback.
   if (state) {
     this->parent_->mute();
   } else {
     this->parent_->unmute();
   }
+  this->publish_state(state);
 }
 
 }  // namespace hid_telephony

@@ -6,8 +6,8 @@ from esphome.const import CONF_ID
 DEPENDENCIES = ["esp32"]
 CODEOWNERS = ["@AntorFr"]
 
-# Cannot be used with hid_mouse or hid_composite (each configures USB)
-CONFLICTS_WITH = ["hid_mouse", "hid_composite"]
+# Cannot be used with other HID components (each configures USB)
+CONFLICTS_WITH = ["hid_mouse", "hid_composite", "hid_telephony"]
 
 CONF_LAYOUT = "layout"
 
