@@ -182,7 +182,7 @@ Mouse: `hid_composite.move`, `hid_composite.click`, `hid_composite.mouse_press`,
 
 Keyboard: `hid_composite.key_press`, `hid_composite.key_tap`, `hid_composite.key_release`, `hid_composite.type`
 
-Telephony: `hid_composite.mute`, `hid_composite.unmute`, `hid_composite.toggle_mute`, `hid_composite.answer_call`, `hid_composite.hang_up`
+Telephony: `hid_composite.mute`, `hid_composite.unmute`, `hid_composite.toggle_mute`, `hid_composite.mute_telephony`, `hid_composite.mute_consumer`, `hid_composite.mute_teams`, `hid_composite.hook_switch`, `hid_composite.answer_call`, `hid_composite.hang_up`, `hid_composite.volume_up`, `hid_composite.volume_down`
 
 Keep Awake: `hid_composite.start_mouse_keep_awake`, `hid_composite.stop_mouse_keep_awake`, `hid_composite.start_keyboard_keep_awake`, `hid_composite.stop_keyboard_keep_awake`
 
@@ -195,11 +195,19 @@ hid_telephony:
 
 | Action | Description |
 |--------|-------------|
-| `hid_telephony.mute` | Send mute button press |
-| `hid_telephony.unmute` | Send unmute button press |
-| `hid_telephony.toggle_mute` | Toggle mute state |
+| `hid_telephony.mute` | Mute via the Telephony page (recommended default — supports bidirectional LED sync) |
+| `hid_telephony.unmute` | Unmute via the Telephony page |
+| `hid_telephony.toggle_mute` | Toggle mute via the Telephony page |
+| `hid_telephony.mute_telephony` | Toggle mute, Telephony page only (page 0x0B) — diagnostic |
+| `hid_telephony.mute_consumer` | Toggle mute, Consumer page only (page 0x0C) — diagnostic |
+| `hid_telephony.mute_teams` | Send Ctrl+Shift+M — Teams' own mute shortcut, for hosts that don't recognize the device as a call-control headset |
+| `hid_telephony.volume_up` | Volume up (Consumer page) |
+| `hid_telephony.volume_down` | Volume down (Consumer page) |
+| `hid_telephony.hook_switch` | Toggle off-hook/on-hook |
 | `hid_telephony.answer` | Answer incoming call |
 | `hid_telephony.hang_up` | End current call |
+
+> **Note**: `mute`/`unmute`/`toggle_mute` use the Telephony page report, the only one with an LED report the host can send back — that's what makes bidirectional sync (mute state reflected in Home Assistant) possible. `mute_telephony`/`mute_consumer`/`mute_teams` exist because host recognition of the Telephony page varies; use them to find what your OS/app responds to, then prefer `mute` for anything wired to a switch or automation.
 
 ## Binary Sensors
 
@@ -214,6 +222,10 @@ binary_sensor:
 ### Telephony Status (hid_composite or hid_telephony)
 ```yaml
 binary_sensor:
+  - platform: hid_composite
+    type: muted
+    name: "Muted"
+
   - platform: hid_composite
     type: in_call
     name: "In Call"

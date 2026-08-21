@@ -7,6 +7,9 @@ CODEOWNERS = ["@AntorFR"]
 DEPENDENCIES = ["esp32"]
 AUTO_LOAD = []
 
+# Cannot be used with other HID components (each configures USB)
+CONFLICTS_WITH = ["hid_keyboard", "hid_composite", "hid_telephony"]
+
 CONF_HID_MOUSE_ID = "hid_mouse_id"
 CONF_INTERVAL = "interval"
 CONF_JITTER = "jitter"

@@ -1,0 +1,64 @@
+name: Validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  config:
+    name: esphome config
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Only configs that source the component via a local path, so this
+        # actually validates the branch under test instead of the last
+        # release fetched from GitHub.
+        file:
+          - ai-s3.yaml
+          - test_composite_simple.yaml
+          - test_composite_switch.yaml
+          - test_composite_telephony.yaml
+          - test_keyboard_simple.yaml
+          - test_keyboard_switch.yaml
+          - test_mouse_switch.yaml
+          - test_random.yaml
+          - test_telephony.yaml
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install esphome
+      - run: esphome config "examples/${{ matrix.file }}"
+
+  compile:
+    name: esphome compile
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # One example per component, to catch real C++ build errors that
+        # `esphome config` (schema-only) can't. Kept small since each is a
+        # full ESP-IDF build.
+        file:
+          - test_composite_telephony.yaml
+          - test_telephony.yaml
+          - test_keyboard_switch.yaml
+          - test_mouse_switch.yaml
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            ~/.cache/pip
+          key: platformio-${{ matrix.file }}-${{ hashFiles('components/**') }}
+          restore-keys: |
+            platformio-${{ matrix.file }}-
+      - run: pip install esphome
+      - run: esphome compile "examples/${{ matrix.file }}"

@@ -21,6 +21,7 @@ HIDTelephony *g_hid_telephony_instance = nullptr;
 // Report IDs
 #define REPORT_ID_TELEPHONY 1
 #define REPORT_ID_CONSUMER 2
+#define REPORT_ID_KEYBOARD 3
 
 // Telephony HID Report Descriptor
 // Based on Poly BT700 Teams-certified headset descriptor analysis
@@ -132,7 +133,35 @@ static const uint8_t hid_report_descriptor[] = {
     // Padding - bits 3-7
     0x95, 0x05,        //   Report Count (5)
     0x81, 0x03,        //   Input (Constant)
-    
+
+    0xC0,              // End Collection
+
+    // ========== KEYBOARD (input-only, for mute_teams shortcut) ==========
+    // Lets mute_teams() send Ctrl+Shift+M directly, matching the shortcut
+    // Teams itself listens for, independent of telephony/consumer recognition.
+    0x05, 0x01,        // Usage Page (Generic Desktop)
+    0x09, 0x06,        // Usage (Keyboard)
+    0xA1, 0x01,        // Collection (Application)
+    0x85, REPORT_ID_KEYBOARD, // Report ID
+    0x05, 0x07,        //   Usage Page (Keyboard)
+    0x19, 0xE0,        //   Usage Minimum (Left Control)
+    0x29, 0xE7,        //   Usage Maximum (Right GUI)
+    0x15, 0x00,        //   Logical Minimum (0)
+    0x25, 0x01,        //   Logical Maximum (1)
+    0x75, 0x01,        //   Report Size (1)
+    0x95, 0x08,        //   Report Count (8)
+    0x81, 0x02,        //   Input (Data, Variable, Absolute) - modifier byte
+    0x95, 0x01,        //   Report Count (1)
+    0x75, 0x08,        //   Report Size (8)
+    0x81, 0x01,        //   Input (Constant) - reserved byte
+    0x95, 0x06,        //   Report Count (6)
+    0x75, 0x08,        //   Report Size (8)
+    0x15, 0x00,        //   Logical Minimum (0)
+    0x25, 0x65,        //   Logical Maximum (101)
+    0x05, 0x07,        //   Usage Page (Keyboard)
+    0x19, 0x00,        //   Usage Minimum (0)
+    0x29, 0x65,        //   Usage Maximum (101)
+    0x81, 0x00,        //   Input (Data, Array) - keycodes
     0xC0,              // End Collection
 };
 
@@ -298,9 +327,8 @@ void HIDTelephony::process_host_report(uint8_t const *buffer, uint16_t bufsize) 
   
   // Check for changes and trigger callbacks
   if (new_muted != this->muted_) {
-    this->muted_ = new_muted;
     ESP_LOGI(TAG, "Mute state changed: %s", new_muted ? "MUTED" : "UNMUTED");
-    this->mute_callbacks_.call(new_muted);
+    this->set_muted_(new_muted);
   }
   
   if (new_off_hook != this->off_hook_) {
@@ -318,21 +346,18 @@ void HIDTelephony::process_host_report(uint8_t const *buffer, uint16_t bufsize) 
   this->hold_ = new_hold;
 }
 
+void HIDTelephony::set_muted_(bool muted) {
+  if (muted == this->muted_) return;
+  this->muted_ = muted;
+  this->mute_callbacks_.call(muted);
+}
+
 void HIDTelephony::mute() {
-  ESP_LOGI(TAG, "Sending mute button press (Telephony + Consumer)");
-  this->mute_button_ = true;
-  
-  // Send BOTH reports to test which one Teams recognizes
-  this->send_report_();           // Telephony Page (0x0B) - Report ID 1
-  delay(10);
-  this->send_consumer_mute_();    // Consumer Page (0x0C) - Report ID 2
-  
-  delay(50);
-  
-  this->mute_button_ = false;
-  this->send_report_();           // Release Telephony
-  delay(10);
-  this->send_consumer_mute_();    // Release Consumer
+  if (this->muted_) {
+    ESP_LOGD(TAG, "Already muted, not sending mute toggle");
+    return;
+  }
+  this->toggle_mute();
 }
 
 void HIDTelephony::mute_telephony() {
@@ -353,13 +378,70 @@ void HIDTelephony::mute_consumer() {
   this->send_consumer_mute_();
 }
 
+void HIDTelephony::send_keyboard_report_(uint8_t modifier, uint8_t keycode) {
+  if (!this->initialized_ || !tud_mounted() || !tud_hid_ready()) return;
+  uint8_t report[8] = {modifier, 0, keycode, 0, 0, 0, 0, 0};
+  tud_hid_report(REPORT_ID_KEYBOARD, report, sizeof(report));
+}
+
+void HIDTelephony::mute_teams() {
+  // Teams shortcut: Ctrl+Shift+M (Windows) or Cmd+Shift+M (Mac)
+  ESP_LOGI(TAG, "Sending Teams mute shortcut (Ctrl+Shift+M)");
+  uint8_t modifier = 0x03;  // Left Ctrl (0x01) + Left Shift (0x02)
+  uint8_t keycode = 0x10;   // 'M' key
+  this->send_keyboard_report_(modifier, keycode);
+  delay(50);
+  this->send_keyboard_report_(0, 0);  // Release
+}
+
+void HIDTelephony::volume_up() {
+  if (!this->initialized_ || !tud_mounted() || !tud_hid_ready()) return;
+  ESP_LOGD(TAG, "Sending Volume Up");
+  uint8_t report = 0x02;  // Volume Increment - bit 1
+  tud_hid_report(REPORT_ID_CONSUMER, &report, sizeof(report));
+  delay(50);
+  report = 0x00;
+  tud_hid_report(REPORT_ID_CONSUMER, &report, sizeof(report));
+}
+
+void HIDTelephony::volume_down() {
+  if (!this->initialized_ || !tud_mounted() || !tud_hid_ready()) return;
+  ESP_LOGD(TAG, "Sending Volume Down");
+  uint8_t report = 0x04;  // Volume Decrement - bit 2
+  tud_hid_report(REPORT_ID_CONSUMER, &report, sizeof(report));
+  delay(50);
+  report = 0x00;
+  tud_hid_report(REPORT_ID_CONSUMER, &report, sizeof(report));
+}
+
 void HIDTelephony::unmute() {
-  // Same as mute - it's a toggle button
-  this->mute();
+  if (!this->muted_) {
+    ESP_LOGD(TAG, "Already unmuted, not sending mute toggle");
+    return;
+  }
+  this->toggle_mute();
 }
 
 void HIDTelephony::toggle_mute() {
-  this->mute();
+  ESP_LOGI(TAG, "Sending mute button press (Telephony + Consumer)");
+  this->mute_button_ = true;
+  
+  // Send BOTH reports to test which one Teams recognizes
+  this->send_report_();           // Telephony Page (0x0B) - Report ID 1
+  delay(10);
+  this->send_consumer_mute_();    // Consumer Page (0x0C) - Report ID 2
+  
+  delay(50);
+  
+  this->mute_button_ = false;
+  this->send_report_();           // Release Telephony
+  delay(10);
+  this->send_consumer_mute_();    // Release Consumer
+
+  // Assume the toggle took effect. Hosts that report the mute LED back correct
+  // us in process_host_report(); hosts that never send one would otherwise
+  // leave muted_ stuck at its initial value forever.
+  this->set_muted_(!this->muted_);
 }
 
 void HIDTelephony::hook_switch() {
@@ -414,11 +496,19 @@ void HIDTelephony::dump_config() {}
 void HIDTelephony::mute() {}
 void HIDTelephony::unmute() {}
 void HIDTelephony::toggle_mute() {}
+void HIDTelephony::mute_telephony() {}
+void HIDTelephony::mute_consumer() {}
+void HIDTelephony::send_keyboard_report_(uint8_t modifier, uint8_t keycode) {}
+void HIDTelephony::mute_teams() {}
+void HIDTelephony::volume_up() {}
+void HIDTelephony::volume_down() {}
 void HIDTelephony::hook_switch() {}
 void HIDTelephony::answer() {}
 void HIDTelephony::hang_up() {}
 void HIDTelephony::send_report_() {}
-void HIDTelephony::process_host_report_(uint8_t const *buffer, uint16_t bufsize) {}
+void HIDTelephony::send_consumer_mute_() {}
+void HIDTelephony::set_muted_(bool muted) {}
+void HIDTelephony::process_host_report(uint8_t const *buffer, uint16_t bufsize) {}
 bool HIDTelephony::is_connected() { return false; }
 bool HIDTelephony::is_ready() { return false; }
 

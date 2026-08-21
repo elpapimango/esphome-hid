@@ -5,8 +5,8 @@
 #include "esphome/core/automation.h"
 
 #ifdef USE_ESP32
-#include <soc/soc_caps.h>
-#if SOC_USB_OTG_SUPPORTED
+// Check for ESP32-S2, ESP32-S3, or ESP32-P4 (chips with USB OTG)
+#if defined(USE_ESP32_VARIANT_ESP32S2) || defined(USE_ESP32_VARIANT_ESP32S3) || defined(USE_ESP32_VARIANT_ESP32P4)
 #define HID_COMPOSITE_SUPPORTED
 #endif
 #endif
@@ -80,9 +80,9 @@ class HIDComposite : public Component {
   void mute();
   void unmute();
   void toggle_mute();
-  void mute_telephony();   // Envoie uniquement le rapport Telephony (0x0B)
-  void mute_consumer();    // Envoie Consumer Mute (system volume)
-  void mute_teams();       // Envoie Ctrl+Shift+M (Teams shortcut)
+  void mute_telephony();   // Sends only the Telephony report (page 0x0B)
+  void mute_consumer();    // Sends Consumer Mute (system volume)
+  void mute_teams();       // Sends Ctrl+Shift+M (Teams shortcut)
   void hook_switch(bool state);
   void answer_call();
   void hang_up();
@@ -143,6 +143,8 @@ class HIDComposite : public Component {
   bool mute_button_{false};
   
   void send_telephony_report();
+  // Updates the cached mute state and notifies listeners when it actually changes.
+  void set_muted_(bool muted);
   
   // Telephony callbacks
   CallbackManager<void(bool)> mute_callbacks_;
@@ -316,6 +318,18 @@ template<typename... Ts>
 class MuteTeamsAction : public Action<Ts...>, public Parented<HIDComposite> {
  public:
   void play(Ts... x) override { this->parent_->mute_teams(); }
+};
+
+template<typename... Ts>
+class VolumeUpAction : public Action<Ts...>, public Parented<HIDComposite> {
+ public:
+  void play(Ts... x) override { this->parent_->volume_up(); }
+};
+
+template<typename... Ts>
+class VolumeDownAction : public Action<Ts...>, public Parented<HIDComposite> {
+ public:
+  void play(Ts... x) override { this->parent_->volume_down(); }
 };
 
 template<typename... Ts>

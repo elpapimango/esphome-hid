@@ -257,19 +257,19 @@ uint8_t const *tud_hid_descriptor_report_cb(uint8_t instance) { return hid_repor
 uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id, hid_report_type_t report_type, uint8_t *buffer, uint16_t reqlen) { return 0; }
 
 void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id, hid_report_type_t report_type, uint8_t const *buffer, uint16_t bufsize) {
-  // Log ALL reports from host for debugging
-  const char* type_str = (report_type == HID_REPORT_TYPE_OUTPUT) ? "OUTPUT" : 
+  // Verbose raw dump of every report from the host, for protocol debugging.
+  const char* type_str = (report_type == HID_REPORT_TYPE_OUTPUT) ? "OUTPUT" :
                          (report_type == HID_REPORT_TYPE_FEATURE) ? "FEATURE" : "UNKNOWN";
-  
+
   // Build hex string of all bytes
   char hex_buf[64] = {0};
   for (uint16_t i = 0; i < bufsize && i < 20; i++) {
     snprintf(hex_buf + i*3, 4, "%02X ", buffer[i]);
   }
-  
-  ESP_LOGI("HID_RAW", ">>> HOST REPORT: instance=%d, id=0x%02X, type=%s, size=%d, data=[%s]", 
+
+  ESP_LOGV("HID_RAW", ">>> HOST REPORT: instance=%d, id=0x%02X, type=%s, size=%d, data=[%s]",
            instance, report_id, type_str, bufsize, hex_buf);
-  
+
   if (report_type == HID_REPORT_TYPE_OUTPUT && g_hid_composite_instance != nullptr) {
     g_hid_composite_instance->process_host_report(report_id, buffer, bufsize);
   }
@@ -348,8 +348,12 @@ void HIDComposite::loop() {
 }
 
 void HIDComposite::dump_config() {
-  ESP_LOGCONFIG(TAG, "HID Composite (Mouse + Keyboard):");
+  ESP_LOGCONFIG(TAG, "HID Composite (Mouse + Keyboard + Telephony):");
   ESP_LOGCONFIG(TAG, "  Status: %s", this->initialized_ ? "Initialized" : "Not initialized");
+  const char *layout_str = this->layout_ == LAYOUT_AZERTY_FR ? "AZERTY_FR"
+                          : this->layout_ == LAYOUT_QWERTZ_DE ? "QWERTZ_DE"
+                                                               : "QWERTY_US";
+  ESP_LOGCONFIG(TAG, "  Keyboard layout: %s", layout_str);
 }
 
 // ============ Mouse Functions ============
@@ -668,33 +672,40 @@ bool HIDComposite::is_ready() {
 
 // ============ Telephony Functions (Poly BT700 Compatible) ============
 
+void HIDComposite::set_muted_(bool muted) {
+  if (muted == this->muted_) return;
+  this->muted_ = muted;
+  this->mute_callbacks_.call(muted);
+}
+
 void HIDComposite::mute() {
-  ESP_LOGI(TAG, "Sending mute (Poly BT700 format)");
+  if (this->muted_) {
+    ESP_LOGD(TAG, "Already muted, not sending mute toggle");
+    return;
+  }
+  this->toggle_mute();
+}
+
+void HIDComposite::unmute() {
+  if (!this->muted_) {
+    ESP_LOGD(TAG, "Already unmuted, not sending mute toggle");
+    return;
+  }
+  this->toggle_mute();
+}
+
+void HIDComposite::toggle_mute() {
+  ESP_LOGI(TAG, "Toggling mute (Poly BT700 format)");
   // RELATIVE input: send 1 (press) then 0 (release)
   this->mute_button_ = true;
   this->send_telephony_report();
   delay(50);
   this->mute_button_ = false;
   this->send_telephony_report();
-}
-
-void HIDComposite::unmute() {
-  ESP_LOGI(TAG, "Sending unmute (Poly BT700 format)");
-  // Same as mute - it's a toggle
-  this->mute_button_ = true;
-  this->send_telephony_report();
-  delay(50);
-  this->mute_button_ = false;
-  this->send_telephony_report();
-}
-
-void HIDComposite::toggle_mute() {
-  ESP_LOGI(TAG, "Toggling mute (Poly BT700 format)");
-  this->mute_button_ = true;
-  this->send_telephony_report();
-  delay(50);
-  this->mute_button_ = false;
-  this->send_telephony_report();
+  // Assume the toggle took effect. Hosts that report the mute LED back correct
+  // us in process_host_report(); hosts that never send one would otherwise
+  // leave muted_ stuck at its initial value forever.
+  this->set_muted_(!this->muted_);
 }
 
 void HIDComposite::hook_switch(bool state) {
@@ -796,7 +807,7 @@ void HIDComposite::volume_down() {
 void HIDComposite::process_host_report(uint8_t report_id, uint8_t const *buffer, uint16_t bufsize) {
   if (bufsize < 1) return;
   
-  ESP_LOGI(TAG, ">>> Received host report: ID=0x%02X, size=%d, data=0x%02X", report_id, bufsize, buffer[0]);
+  ESP_LOGD(TAG, ">>> Received host report: ID=0x%02X, size=%d, data=0x%02X", report_id, bufsize, buffer[0]);
   
   if (report_id == REPORT_ID_TELEPHONY_LED) {
     // LED report format:
@@ -813,13 +824,12 @@ void HIDComposite::process_host_report(uint8_t report_id, uint8_t const *buffer,
     bool new_hold = (leds & 0x08) != 0;
     bool new_mic = (leds & 0x10) != 0;
     
-    ESP_LOGI(TAG, "LED Report: Mute=%d, OffHook=%d, Ring=%d, Hold=%d, Mic=%d",
+    ESP_LOGD(TAG, "LED Report: Mute=%d, OffHook=%d, Ring=%d, Hold=%d, Mic=%d",
              new_muted, new_off_hook, new_ringing, new_hold, new_mic);
     
     if (new_muted != this->muted_) {
-      this->muted_ = new_muted;
       ESP_LOGI(TAG, ">>> MUTE STATE FROM TEAMS: %s <<<", new_muted ? "MUTED" : "UNMUTED");
-      this->mute_callbacks_.call(new_muted);
+      this->set_muted_(new_muted);
     }
     
     if (new_off_hook != this->off_hook_) {
@@ -888,7 +898,8 @@ void HIDComposite::hook_switch(bool state) {}
 void HIDComposite::answer_call() {}
 void HIDComposite::hang_up() {}
 void HIDComposite::send_telephony_report() {}
-void HIDComposite::process_host_report(uint8_t const *buffer, uint16_t bufsize) {}
+void HIDComposite::set_muted_(bool muted) {}
+void HIDComposite::process_host_report(uint8_t report_id, uint8_t const *buffer, uint16_t bufsize) {}
 }  // namespace hid_composite
 }  // namespace esphome
 

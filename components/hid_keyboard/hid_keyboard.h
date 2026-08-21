@@ -8,7 +8,8 @@
 
 #include <string>
 
-#if defined(CONFIG_IDF_TARGET_ESP32S3) || defined(CONFIG_IDF_TARGET_ESP32S2)
+// Check for ESP32-S2, ESP32-S3, or ESP32-P4 (chips with USB OTG)
+#if defined(USE_ESP32_VARIANT_ESP32S2) || defined(USE_ESP32_VARIANT_ESP32S3) || defined(USE_ESP32_VARIANT_ESP32P4)
 #define HID_KEYBOARD_SUPPORTED
 #endif
 
