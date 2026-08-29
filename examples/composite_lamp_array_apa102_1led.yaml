@@ -1,0 +1,92 @@
+# Mouse + keyboard + telephony + LampArray on one USB device, single onboard
+# APA102 RGB LED instead of a WS2812 backlight strip.
+#
+# APA102 is clocked (data + clock pins), unlike WS2812's single-wire timing,
+# so it uses the spi_led_strip light platform (APA102-protocol SPI driver)
+# over an SPI bus. fastled_spi is arduino-only and this project runs
+# esp-idf, so it's not an option.
+#
+# Adjust clk_pin/mosi_pin below if your board wires them the other way
+# round, and swap the esp32.board line for your actual board.
+#
+# The lamps sit at report IDs 6-11, after the keyboard, mouse, telephony and
+# consumer reports. Because the descriptor changes, this build enumerates under
+# PID 0x4007 instead of the plain composite's 0x4004.
+
+esphome:
+  name: test-composite-lamp-array-1led
+  platformio_options:
+    build_flags:
+      - -DCFG_TUD_HID=1
+      # A LampArray multi-update report is 51 bytes with its report ID and has
+      # to fit TinyUSB's HID buffer.
+      - -DCFG_TUD_HID_EP_BUFSIZE=64
+
+esp32:
+  board: esp32-s3-devkitc-1
+  framework:
+    type: esp-idf
+    sdkconfig_options:
+      CONFIG_USJ_ENABLE_USB_SERIAL_JTAG: "n"
+      CONFIG_TINYUSB_HID_COUNT: "1"
+      CONFIG_ESP_CONSOLE_UART_DEFAULT: "y"
+    components:
+      - espressif/esp_tinyusb~2.0.0
+
+logger:
+  hardware_uart: UART0
+
+external_components:
+  - source:
+      type: local
+      path: ../components
+    components: [hid_composite]
+
+hid_composite:
+  id: my_hid
+  layout: QWERTY_US
+  lamp_array:
+    lamp_count: 1
+    kind: PERIPHERAL
+    # Single point, no real spatial extent — width/height just need one
+    # nonzero dimension to satisfy the schema.
+    width: 10mm
+    height: 10mm
+    depth: 10mm
+    rows: 1
+    purposes: [ACCENT]
+    on_lamp_update:
+      - lambda: |-
+          ESP_LOGD("lamps", "lamp %u -> %02X%02X%02X", lamp_id, color.r, color.g, color.b);
+
+spi:
+  clk_pin: GPIO39
+  mosi_pin: GPIO40
+
+light:
+  - platform: spi_led_strip
+    id: strip
+    name: "RGB LED"
+    num_leds: 1
+    effects:
+      - lamp_array:
+          hid_composite_id: my_hid
+
+binary_sensor:
+  - platform: hid_composite
+    type: connected
+    name: "PC Connected"
+
+  - platform: gpio
+    pin:
+      number: GPIO0
+      inverted: true
+    name: "Key 1"
+    on_press:
+      - hid_composite.key_tap:
+          key: "a"
+
+switch:
+  - platform: hid_composite
+    type: mute
+    name: "Mute"
