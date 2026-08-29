@@ -2,6 +2,9 @@
 
 ESPHome external components to simulate USB HID devices (mouse, keyboard, telephony) on ESP32-S3.
 
+Based on [AntorFR/esphome-hid](https://github.com/AntorFR/esphome-hid); this repo has since diverged
+and is maintained independently.
+
 ## Components
 
 | Component | Description |
@@ -59,7 +62,7 @@ All components provide:
 external_components:
   - source:
       type: git
-      url: https://github.com/AntorFr/esphome-hid
+      url: https://github.com/elpapimango/esphome-hid
       ref: main
     components: [hid_mouse]
 
@@ -67,7 +70,7 @@ external_components:
 external_components:
   - source:
       type: git
-      url: https://github.com/AntorFr/esphome-hid
+      url: https://github.com/elpapimango/esphome-hid
       ref: main
     components: [hid_keyboard]
 
@@ -75,7 +78,7 @@ external_components:
 external_components:
   - source:
       type: git
-      url: https://github.com/AntorFr/esphome-hid
+      url: https://github.com/elpapimango/esphome-hid
       ref: main
     components: [hid_composite]
 ```

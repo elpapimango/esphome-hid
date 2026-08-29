@@ -3,7 +3,7 @@ import esphome.config_validation as cv
 from esphome import automation
 from esphome.const import CONF_ID
 
-CODEOWNERS = ["@AntorFR"]
+CODEOWNERS = ["@elpapimango"]
 DEPENDENCIES = ["esp32"]
 AUTO_LOAD = []
 

@@ -6,7 +6,7 @@ from esphome.const import CONF_ID
 from .. import hid_keyboard_ns, HIDKeyboard
 
 DEPENDENCIES = ["hid_keyboard"]
-CODEOWNERS = ["@AntorFr"]
+CODEOWNERS = ["@elpapimango"]
 
 CONF_HID_KEYBOARD_ID = "hid_keyboard_id"
 CONF_KEY = "key"

@@ -3,7 +3,7 @@ import esphome.config_validation as cv
 from esphome import automation
 from esphome.const import CONF_ID
 
-CODEOWNERS = ["@AntorFr"]
+CODEOWNERS = ["@elpapimango"]
 DEPENDENCIES = ["esp32"]
 
 # Cannot be used with other HID components (each configures USB)

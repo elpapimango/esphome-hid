@@ -3,7 +3,7 @@ import esphome.config_validation as cv
 from esphome import automation
 from esphome.const import CONF_ID
 
-CODEOWNERS = ["@AntorFr"]
+CODEOWNERS = ["@elpapimango"]
 DEPENDENCIES = ["esp32"]
 CONFLICTS_WITH = ["hid_mouse", "hid_keyboard", "hid_telephony"]
 

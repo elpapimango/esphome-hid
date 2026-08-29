@@ -6,7 +6,7 @@ from esphome.const import DEVICE_CLASS_CONNECTIVITY
 from .. import hid_composite_ns, HIDComposite
 
 DEPENDENCIES = ["hid_composite"]
-CODEOWNERS = ["@AntorFr"]
+CODEOWNERS = ["@elpapimango"]
 
 CONF_HID_COMPOSITE_ID = "hid_composite_id"
 

@@ -132,7 +132,7 @@ CI (`.github/workflows/validate.yml`) runs both across all local-path examples o
 external_components:
   - source:
       type: git
-      url: https://github.com/AntorFR/esphome-hid
+      url: https://github.com/elpapimango/esphome-hid
       ref: main
     components: [hid_mouse]  # or hid_keyboard / hid_telephony / hid_composite
 
