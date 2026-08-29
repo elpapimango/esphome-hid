@@ -1,9 +1,8 @@
 esphome:
   name: test-mouse-switch
 
-  platformio_options:
-    build_flags:
-      - -DCFG_TUD_HID=1
+  build_flags:
+    - -DCFG_TUD_HID=1
 
 esp32:
   board: esp32-s3-devkitc-1

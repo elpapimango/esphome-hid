@@ -10,10 +10,9 @@
 
 esphome:
   name: test-lamp-array-1led
-  platformio_options:
-    build_flags:
-      - -DCFG_TUD_HID=1
-      - -DCFG_TUD_HID_EP_BUFSIZE=64
+  build_flags:
+    - -DCFG_TUD_HID=1
+    - -DCFG_TUD_HID_EP_BUFSIZE=64
 
 esp32:
   board: esp32-s3-devkitc-1
