@@ -99,12 +99,11 @@ external_components:
 ```yaml
 esphome:
   name: esp32-hid
-  platformio_options:
-    build_flags:
-      - -DCFG_TUD_HID=1
-      # Only needed for LampArray: a multi-update report is 51 bytes with its
-      # report ID and has to fit TinyUSB's HID buffer.
-      - -DCFG_TUD_HID_EP_BUFSIZE=64
+  build_flags:
+    - -DCFG_TUD_HID=1
+    # Only needed for LampArray: a multi-update report is 51 bytes with its
+    # report ID and has to fit TinyUSB's HID buffer.
+    - -DCFG_TUD_HID_EP_BUFSIZE=64
 
 esp32:
   board: esp32-s3-devkitc-1
