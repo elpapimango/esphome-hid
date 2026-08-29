@@ -307,7 +307,7 @@ uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id, hid_report_t
 }
 
 void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id, hid_report_type_t report_type, uint8_t const *buffer, uint16_t bufsize) {
-  // Log ALL reports from host for debugging
+  // Verbose raw dump of every report from the host, for protocol debugging.
   bool log_this_report = true;
 
 #ifdef USE_HID_COMPOSITE_LAMP_ARRAY
@@ -325,7 +325,7 @@ void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id, hid_report_type_
     } else {
       last_lamp_log = now;
       if (lamp_reports_skipped > 0) {
-        ESP_LOGI("HID_RAW", ">>> ... %" PRIu32 " further lamp reports not logged", lamp_reports_skipped);
+        ESP_LOGV("HID_RAW", ">>> ... %" PRIu32 " further lamp reports not logged", lamp_reports_skipped);
         lamp_reports_skipped = 0;
       }
     }
@@ -341,7 +341,7 @@ void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id, hid_report_type_
     for (uint16_t i = 0; i < bufsize && i < 20; i++) {
       snprintf(hex_buf + i*3, 4, "%02X ", buffer[i]);
     }
-    ESP_LOGI("HID_RAW", ">>> HOST REPORT: instance=%d, id=0x%02X, type=%s, size=%d, data=[%s]",
+    ESP_LOGV("HID_RAW", ">>> HOST REPORT: instance=%d, id=0x%02X, type=%s, size=%d, data=[%s]",
              instance, report_id, type_str, bufsize, hex_buf);
   }
 
@@ -481,11 +481,22 @@ void HIDComposite::publish_telephony_state_() {
     ESP_LOGI(TAG, "Ring state changed: %s", ringing ? "RINGING" : "NOT RINGING");
     this->ring_callbacks_.call(ringing);
   }
+
+  const bool hold = this->hold_.load();
+  if (hold != this->published_hold_) {
+    this->published_hold_ = hold;
+    ESP_LOGI(TAG, "Hold state changed: %s", hold ? "ON HOLD" : "NOT ON HOLD");
+    this->hold_callbacks_.call(hold);
+  }
 }
 
 void HIDComposite::dump_config() {
-  ESP_LOGCONFIG(TAG, "HID Composite (Mouse + Keyboard):");
+  ESP_LOGCONFIG(TAG, "HID Composite (Mouse + Keyboard + Telephony):");
   ESP_LOGCONFIG(TAG, "  Status: %s", this->initialized_ ? "Initialized" : "Not initialized");
+  const char *layout_str = this->layout_ == LAYOUT_AZERTY_FR ? "AZERTY_FR"
+                          : this->layout_ == LAYOUT_QWERTZ_DE ? "QWERTZ_DE"
+                                                               : "QWERTY_US";
+  ESP_LOGCONFIG(TAG, "  Keyboard layout: %s", layout_str);
 #ifdef USE_HID_COMPOSITE_LAMP_ARRAY
   ESP_LOGCONFIG(TAG, "  LampArray lamps: %u (report IDs %d-%d)", this->lamp_array_.lamp_count(),
                 REPORT_ID_LAMP_ARRAY_BASE, REPORT_ID_LAMP_ARRAY_BASE + lamp_array_core::LAMP_ARRAY_REPORT_COUNT - 1);
@@ -900,6 +911,18 @@ bool HIDComposite::is_ready() {
 
 // ============ Telephony Functions (Poly BT700 Compatible) ============
 
+// Optimistically updates the cached mute state and fires the callback right
+// away. Safe to call directly (unlike process_host_report()) because every
+// caller runs from action/loop context, never the TinyUSB task.
+void HIDComposite::set_muted_(bool muted) {
+  this->muted_.store(muted);
+  this->host_state_known_.store(true);
+  if (muted != this->published_muted_) {
+    this->published_muted_ = muted;
+    this->mute_callbacks_.call(muted);
+  }
+}
+
 // Presses and releases the mute button. The press/release gap is scheduled
 // rather than delay()ed, so the ESPHome loop keeps running.
 void HIDComposite::send_mute_pulse_(bool telephony, bool consumer) {
@@ -926,6 +949,10 @@ void HIDComposite::set_mute(bool state) {
   }
   ESP_LOGI(TAG, "Requesting %s", state ? "mute" : "unmute");
   this->send_mute_pulse_(true, false);
+  // Assume the request took effect. Hosts that echo the Telephony LED correct
+  // us for real in process_host_report(); hosts that never send one would
+  // otherwise leave muted_ stuck at whatever it was before.
+  this->set_muted_(state);
 }
 
 void HIDComposite::mute() { this->set_mute(true); }
@@ -935,6 +962,8 @@ void HIDComposite::unmute() { this->set_mute(false); }
 void HIDComposite::toggle_mute() {
   ESP_LOGI(TAG, "Toggling mute (Poly BT700 format)");
   this->send_mute_pulse_(true, false);
+  // Assume the toggle took effect, same reasoning as set_mute() above.
+  this->set_muted_(!this->muted_.load());
 }
 
 void HIDComposite::hook_switch(bool state) {
@@ -978,6 +1007,9 @@ void HIDComposite::mute_telephony() {
   ESP_LOGI(TAG, "Sending Telephony mute (Poly BT700 compatible)");
   // RELATIVE input: a press then a release, scheduled so the loop keeps running.
   this->send_mute_pulse_(true, false);
+  // Assume the toggle took effect, same as toggle_mute() - otherwise a host
+  // that never echoes the Telephony LED leaves muted_ stuck forever.
+  this->set_muted_(!this->muted_.load());
 }
 
 // Sends one Consumer Control button as a press then a scheduled release.
@@ -997,6 +1029,7 @@ void HIDComposite::send_consumer_pulse_(uint8_t bit, const char *name) {
 void HIDComposite::mute_consumer() {
   ESP_LOGI(TAG, "Sending Consumer Mute (system volume mute)");
   this->send_consumer_pulse_(0x01, "Mute");
+  this->set_muted_(!this->muted_.load());
 }
 
 void HIDComposite::mute_teams() {
@@ -1005,6 +1038,7 @@ void HIDComposite::mute_teams() {
 
   this->send_keyboard_report(MOD_LEFT_CTRL | MOD_LEFT_SHIFT, KEY_M);
   this->set_timeout("teams_release", KEY_PULSE_MS, [this]() { this->send_keyboard_report(0, 0); });
+  this->set_muted_(!this->muted_.load());
 }
 
 void HIDComposite::volume_up() { this->send_consumer_pulse_(0x02, "Volume Up"); }
@@ -1014,7 +1048,7 @@ void HIDComposite::volume_down() { this->send_consumer_pulse_(0x04, "Volume Down
 void HIDComposite::process_host_report(uint8_t report_id, uint8_t const *buffer, uint16_t bufsize) {
   if (bufsize < 1) return;
   
-  ESP_LOGI(TAG, ">>> Received host report: ID=0x%02X, size=%d, data=0x%02X", report_id, bufsize, buffer[0]);
+  ESP_LOGD(TAG, ">>> Received host report: ID=0x%02X, size=%d, data=0x%02X", report_id, bufsize, buffer[0]);
   
   if (report_id == REPORT_ID_TELEPHONY_LED) {
     // LED report format:
@@ -1024,7 +1058,7 @@ void HIDComposite::process_host_report(uint8_t report_id, uint8_t const *buffer,
     // bit 3 = Hold LED
     // bit 4 = Microphone LED
     uint8_t leds = buffer[0];
-    
+
     const bool new_mic = (leds & 0x10) != 0;
 
     // Cache only; publish_telephony_state_() fires the automations from loop(),
@@ -1092,6 +1126,7 @@ void HIDComposite::answer_call() {}
 void HIDComposite::hang_up() {}
 void HIDComposite::send_telephony_report() {}
 void HIDComposite::set_mute(bool state) {}
+void HIDComposite::set_muted_(bool muted) {}
 void HIDComposite::send_mute_pulse_(bool telephony, bool consumer) {}
 void HIDComposite::send_consumer_pulse_(uint8_t bit, const char *name) {}
 void HIDComposite::publish_telephony_state_() {}

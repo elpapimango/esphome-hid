@@ -35,7 +35,7 @@ wifi:
 external_components:
   - source:
       type: git
-      url: https://github.com/AntorFr/esphome-hid
+      url: https://github.com/elpapimango/esphome-hid
       ref: main
     components: [hid_composite]
 

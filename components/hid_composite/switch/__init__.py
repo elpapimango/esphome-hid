@@ -6,7 +6,7 @@ from esphome.const import CONF_ID, CONF_TYPE
 from .. import hid_composite_ns, HIDComposite
 
 DEPENDENCIES = ["hid_composite"]
-CODEOWNERS = ["@AntorFr"]
+CODEOWNERS = ["@elpapimango"]
 
 CONF_HID_COMPOSITE_ID = "hid_composite_id"
 CONF_KEY = "key"

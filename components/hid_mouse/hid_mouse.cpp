@@ -312,8 +312,7 @@ bool HIDMouse::is_ready() {
 
 #else  // HID_MOUSE_SUPPORTED
 
-// Stubs for ESP32 variants without USB OTG. The class is only declared inside
-// USE_ESP32, so this block has to sit inside it too.
+// Stubs for ESP32 variants without USB OTG (and non-ESP32 platforms)
 namespace esphome {
 namespace hid_mouse {
 
@@ -337,5 +336,4 @@ bool HIDMouse::is_ready() { return false; }
 }  // namespace esphome
 
 #endif  // HID_MOUSE_SUPPORTED
-
 #endif  // USE_ESP32

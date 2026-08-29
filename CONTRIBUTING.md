@@ -6,7 +6,7 @@ Thank you for your interest in contributing to esphome-hid!
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/AntorFR/esphome-hid.git
+   git clone https://github.com/elpapimango/esphome-hid.git
    cd esphome-hid
    ```
 

@@ -6,7 +6,7 @@ from esphome.components.light.types import AddressableLightEffect
 from esphome.const import CONF_EFFECTS, CONF_ID, CONF_LIGHT, CONF_NAME, CONF_OFFSET
 import esphome.final_validate as fv
 
-CODEOWNERS = ["@AntorFr"]
+CODEOWNERS = ["@elpapimango"]
 DEPENDENCIES = ["esp32"]
 CONFLICTS_WITH = ["hid_mouse", "hid_keyboard", "hid_telephony", "hid_lamp_array"]
 
@@ -55,6 +55,8 @@ MuteTeamsAction = hid_composite_ns.class_("MuteTeamsAction", automation.Action)
 HookSwitchAction = hid_composite_ns.class_("HookSwitchAction", automation.Action)
 AnswerCallAction = hid_composite_ns.class_("AnswerCallAction", automation.Action)
 HangUpAction = hid_composite_ns.class_("HangUpAction", automation.Action)
+VolumeUpAction = hid_composite_ns.class_("VolumeUpAction", automation.Action)
+VolumeDownAction = hid_composite_ns.class_("VolumeDownAction", automation.Action)
 
 CONF_X = "x"
 CONF_Y = "y"
@@ -600,6 +602,26 @@ MUTE_TEAMS_ACTION_SCHEMA = cv.Schema({
 
 @automation.register_action("hid_composite.mute_teams", MuteTeamsAction, MUTE_TEAMS_ACTION_SCHEMA)
 async def mute_teams_action_to_code(config, action_id, template_arg, args):
+    var = cg.new_Pvariable(action_id, template_arg)
+    await cg.register_parented(var, config[CONF_ID])
+    return var
+
+VOLUME_UP_ACTION_SCHEMA = cv.Schema({
+    cv.GenerateID(): cv.use_id(HIDComposite),
+})
+
+@automation.register_action("hid_composite.volume_up", VolumeUpAction, VOLUME_UP_ACTION_SCHEMA)
+async def volume_up_action_to_code(config, action_id, template_arg, args):
+    var = cg.new_Pvariable(action_id, template_arg)
+    await cg.register_parented(var, config[CONF_ID])
+    return var
+
+VOLUME_DOWN_ACTION_SCHEMA = cv.Schema({
+    cv.GenerateID(): cv.use_id(HIDComposite),
+})
+
+@automation.register_action("hid_composite.volume_down", VolumeDownAction, VOLUME_DOWN_ACTION_SCHEMA)
+async def volume_down_action_to_code(config, action_id, template_arg, args):
     var = cg.new_Pvariable(action_id, template_arg)
     await cg.register_parented(var, config[CONF_ID])
     return var

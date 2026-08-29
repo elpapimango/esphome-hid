@@ -6,7 +6,7 @@ from esphome.const import CONF_ID
 from .. import hid_mouse_ns, HIDMouse
 
 DEPENDENCIES = ["hid_mouse"]
-CODEOWNERS = ["@AntorFr"]
+CODEOWNERS = ["@elpapimango"]
 
 CONF_HID_MOUSE_ID = "hid_mouse_id"
 CONF_INTERVAL = "interval"

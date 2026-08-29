@@ -6,8 +6,8 @@
 #include "esphome/core/helpers.h"
 
 #ifdef USE_ESP32
-#include <soc/soc_caps.h>
-#if SOC_USB_OTG_SUPPORTED
+// Check for ESP32-S2, ESP32-S3, or ESP32-P4 (chips with USB OTG)
+#if defined(USE_ESP32_VARIANT_ESP32S2) || defined(USE_ESP32_VARIANT_ESP32S3) || defined(USE_ESP32_VARIANT_ESP32P4)
 #define HID_COMPOSITE_SUPPORTED
 #endif
 #endif
@@ -91,9 +91,9 @@ class HIDComposite : public Component {
   void unmute();
   void toggle_mute();
   void set_mute(bool state);
-  void mute_telephony();   // Envoie uniquement le rapport Telephony (0x0B)
-  void mute_consumer();    // Envoie Consumer Mute (system volume)
-  void mute_teams();       // Envoie Ctrl+Shift+M (Teams shortcut)
+  void mute_telephony();   // Sends only the Telephony report (page 0x0B)
+  void mute_consumer();    // Sends Consumer Mute (system volume)
+  void mute_teams();       // Sends Ctrl+Shift+M (Teams shortcut)
   void hook_switch(bool state);
   void answer_call();
   void hang_up();
@@ -174,6 +174,9 @@ class HIDComposite : public Component {
   std::atomic<bool> off_hook_{false};
   std::atomic<bool> ringing_{false};
   std::atomic<bool> hold_{false};
+  // False until the host has sent an LED report, or an action has optimistically
+  // guessed the result (see set_muted_()). While false, muted_ is just its
+  // zero-init default, not a real observation, so set_mute() must not trust it.
   std::atomic<bool> host_state_known_{false};
   std::atomic<bool> led_state_dirty_{false};
   // Raw byte from the last LED report, kept so loop() can log it verbatim.
@@ -183,6 +186,7 @@ class HIDComposite : public Component {
   bool published_muted_{false};
   bool published_off_hook_{false};
   bool published_ringing_{false};
+  bool published_hold_{false};
 
   // Button states we send to the host.
   bool hook_button_{false};
@@ -193,6 +197,11 @@ class HIDComposite : public Component {
   void send_mute_pulse_(bool telephony, bool consumer);
   void send_consumer_pulse_(uint8_t bit, const char *name);
   void publish_telephony_state_();
+  // Optimistically updates the cached mute state and notifies listeners right
+  // away. Called only from action context (mute()/unmute()/toggle_mute() and
+  // the mute_* fallbacks), never from process_host_report() — that path runs
+  // on the TinyUSB task and must go through led_state_dirty_ instead.
+  void set_muted_(bool muted);
 
   // type() runs from loop() one keystroke at a time, so typing a long string no
   // longer blocks every other component for its whole duration.
@@ -203,7 +212,7 @@ class HIDComposite : public Component {
   uint32_t type_jitter_ms_{0};
   uint32_t type_next_time_{0};
   bool type_key_down_{false};
-  
+
   // Telephony callbacks
   CallbackManager<void(bool)> mute_callbacks_;
   CallbackManager<void(bool)> off_hook_callbacks_;
@@ -414,6 +423,18 @@ template<typename... Ts>
 class MuteTeamsAction : public Action<Ts...>, public Parented<HIDComposite> {
  public:
   void play(Ts... x) override { this->parent_->mute_teams(); }
+};
+
+template<typename... Ts>
+class VolumeUpAction : public Action<Ts...>, public Parented<HIDComposite> {
+ public:
+  void play(Ts... x) override { this->parent_->volume_up(); }
+};
+
+template<typename... Ts>
+class VolumeDownAction : public Action<Ts...>, public Parented<HIDComposite> {
+ public:
+  void play(Ts... x) override { this->parent_->volume_down(); }
 };
 
 template<typename... Ts>

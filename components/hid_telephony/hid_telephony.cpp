@@ -21,10 +21,14 @@ HIDTelephony *g_hid_telephony_instance = nullptr;
 // Report IDs
 #define REPORT_ID_TELEPHONY 1
 #define REPORT_ID_CONSUMER 2
+#define REPORT_ID_KEYBOARD 3
 
-// How long the mute / hook buttons stay pressed before being released.
+// How long the mute / hook / volume buttons and the Teams keyboard shortcut
+// stay pressed before being released.
 static const uint32_t MUTE_PULSE_MS = 50;
 static const uint32_t HOOK_PULSE_MS = 50;
+static const uint32_t CONSUMER_PULSE_MS = 50;
+static const uint32_t KEY_PULSE_MS = 50;
 
 // Telephony HID Report Descriptor
 // Based on Poly BT700 Teams-certified headset descriptor analysis
@@ -139,7 +143,35 @@ static const uint8_t hid_report_descriptor[] = {
     // Padding - bits 3-7
     0x95, 0x05,        //   Report Count (5)
     0x81, 0x03,        //   Input (Constant)
-    
+
+    0xC0,              // End Collection
+
+    // ========== KEYBOARD (input-only, for mute_teams shortcut) ==========
+    // Lets mute_teams() send Ctrl+Shift+M directly, matching the shortcut
+    // Teams itself listens for, independent of telephony/consumer recognition.
+    0x05, 0x01,        // Usage Page (Generic Desktop)
+    0x09, 0x06,        // Usage (Keyboard)
+    0xA1, 0x01,        // Collection (Application)
+    0x85, REPORT_ID_KEYBOARD, // Report ID
+    0x05, 0x07,        //   Usage Page (Keyboard)
+    0x19, 0xE0,        //   Usage Minimum (Left Control)
+    0x29, 0xE7,        //   Usage Maximum (Right GUI)
+    0x15, 0x00,        //   Logical Minimum (0)
+    0x25, 0x01,        //   Logical Maximum (1)
+    0x75, 0x01,        //   Report Size (1)
+    0x95, 0x08,        //   Report Count (8)
+    0x81, 0x02,        //   Input (Data, Variable, Absolute) - modifier byte
+    0x95, 0x01,        //   Report Count (1)
+    0x75, 0x08,        //   Report Size (8)
+    0x81, 0x01,        //   Input (Constant) - reserved byte
+    0x95, 0x06,        //   Report Count (6)
+    0x75, 0x08,        //   Report Size (8)
+    0x15, 0x00,        //   Logical Minimum (0)
+    0x25, 0x65,        //   Logical Maximum (101)
+    0x05, 0x07,        //   Usage Page (Keyboard)
+    0x19, 0x00,        //   Usage Minimum (0)
+    0x29, 0x65,        //   Usage Maximum (101)
+    0x81, 0x00,        //   Input (Data, Array) - keycodes
     0xC0,              // End Collection
 };
 
@@ -308,8 +340,22 @@ void HIDTelephony::send_consumer_mute_() {
   if (this->mute_button_) consumer_report |= 0x01;  // Consumer Mute - bit 0
   
   tud_hid_report(REPORT_ID_CONSUMER, &consumer_report, 1);
-  ESP_LOGI(TAG, "Sent CONSUMER report (ID=%d): mute=%d", 
+  ESP_LOGI(TAG, "Sent CONSUMER report (ID=%d): mute=%d",
            REPORT_ID_CONSUMER, this->mute_button_);
+}
+
+// Sends one Consumer Control button as a press then a scheduled release.
+void HIDTelephony::send_consumer_pulse_(uint8_t bit, const char *name) {
+  if (!this->initialized_ || !tud_mounted() || !tud_hid_ready()) return;
+
+  ESP_LOGD(TAG, "Sending Consumer %s", name);
+  uint8_t report = bit;
+  tud_hid_report(REPORT_ID_CONSUMER, &report, sizeof(report));
+  this->set_timeout("consumer_release", CONSUMER_PULSE_MS, [this]() {
+    if (!tud_mounted() || !tud_hid_ready()) return;
+    uint8_t release = 0x00;
+    tud_hid_report(REPORT_ID_CONSUMER, &release, sizeof(release));
+  });
 }
 
 // Runs on the TinyUSB task: cache the state and flag it, nothing more. loop()
@@ -338,7 +384,17 @@ void HIDTelephony::process_host_report(uint8_t const *buffer, uint16_t bufsize) 
   this->led_state_dirty_.store(true);
 }
 
-void HIDTelephony::mute() { this->set_mute(true); }
+// Optimistically updates the cached mute state and fires the callback right
+// away. Safe to call directly (unlike process_host_report()) because every
+// caller runs from action/loop context, never the TinyUSB task.
+void HIDTelephony::set_muted_(bool muted) {
+  this->muted_.store(muted);
+  this->host_state_known_.store(true);
+  if (muted != this->published_muted_) {
+    this->published_muted_ = muted;
+    this->mute_callbacks_.call(muted);
+  }
+}
 
 // Presses and releases the mute button. The press/release gap is scheduled
 // rather than delay()ed, so the ESPHome loop keeps running.
@@ -361,12 +417,36 @@ void HIDTelephony::send_mute_pulse_(bool telephony, bool consumer) {
 void HIDTelephony::mute_telephony() {
   ESP_LOGI(TAG, "Sending TELEPHONY mute only (Page 0x0B, Usage 0x2F)");
   this->send_mute_pulse_(true, false);
+  // Assume the toggle took effect, same as toggle_mute() - otherwise a host
+  // that never echoes the Telephony LED leaves muted_ stuck forever.
+  this->set_muted_(!this->muted_.load());
 }
 
 void HIDTelephony::mute_consumer() {
   ESP_LOGI(TAG, "Sending CONSUMER mute only (Page 0x0C, Usage 0xE2)");
   this->send_mute_pulse_(false, true);
+  this->set_muted_(!this->muted_.load());
 }
+
+void HIDTelephony::send_keyboard_report_(uint8_t modifier, uint8_t keycode) {
+  if (!this->initialized_ || !tud_mounted() || !tud_hid_ready()) return;
+  uint8_t report[8] = {modifier, 0, keycode, 0, 0, 0, 0, 0};
+  tud_hid_report(REPORT_ID_KEYBOARD, report, sizeof(report));
+}
+
+void HIDTelephony::mute_teams() {
+  // Teams shortcut: Ctrl+Shift+M (Windows) or Cmd+Shift+M (Mac)
+  ESP_LOGI(TAG, "Sending Teams mute shortcut (Ctrl+Shift+M)");
+  uint8_t modifier = 0x03;  // Left Ctrl (0x01) + Left Shift (0x02)
+  uint8_t keycode = 0x10;   // 'M' key
+  this->send_keyboard_report_(modifier, keycode);
+  this->set_timeout("teams_release", KEY_PULSE_MS, [this]() { this->send_keyboard_report_(0, 0); });
+  this->set_muted_(!this->muted_.load());
+}
+
+void HIDTelephony::volume_up() { this->send_consumer_pulse_(0x02, "Volume Up"); }
+
+void HIDTelephony::volume_down() { this->send_consumer_pulse_(0x04, "Volume Down"); }
 
 // The mute button is a toggle on the wire, so an absolute request only presses
 // it when the PC's reported state disagrees. Until the host has sent an LED
@@ -378,13 +458,20 @@ void HIDTelephony::set_mute(bool state) {
   }
   ESP_LOGI(TAG, "Requesting %s", state ? "mute" : "unmute");
   this->send_mute_pulse_(true, true);
+  this->set_muted_(state);
 }
+
+void HIDTelephony::mute() { this->set_mute(true); }
 
 void HIDTelephony::unmute() { this->set_mute(false); }
 
 void HIDTelephony::toggle_mute() {
   ESP_LOGI(TAG, "Toggling mute");
   this->send_mute_pulse_(true, true);
+  // Assume the toggle took effect. Hosts that report the mute LED back correct
+  // us in process_host_report(); hosts that never send one would otherwise
+  // leave muted_ stuck at its initial value forever.
+  this->set_muted_(!this->muted_.load());
 }
 
 void HIDTelephony::hook_switch() {
@@ -443,12 +530,18 @@ void HIDTelephony::toggle_mute() {}
 void HIDTelephony::set_mute(bool state) {}
 void HIDTelephony::mute_telephony() {}
 void HIDTelephony::mute_consumer() {}
+void HIDTelephony::send_keyboard_report_(uint8_t modifier, uint8_t keycode) {}
+void HIDTelephony::mute_teams() {}
+void HIDTelephony::volume_up() {}
+void HIDTelephony::volume_down() {}
 void HIDTelephony::hook_switch() {}
 void HIDTelephony::answer() {}
 void HIDTelephony::hang_up() {}
 void HIDTelephony::send_report_() {}
 void HIDTelephony::send_consumer_mute_() {}
+void HIDTelephony::send_consumer_pulse_(uint8_t bit, const char *name) {}
 void HIDTelephony::send_mute_pulse_(bool telephony, bool consumer) {}
+void HIDTelephony::set_muted_(bool muted) {}
 void HIDTelephony::process_host_report(uint8_t const *buffer, uint16_t bufsize) {}
 bool HIDTelephony::is_connected() { return false; }
 bool HIDTelephony::is_ready() { return false; }

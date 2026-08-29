@@ -6,7 +6,7 @@ from esphome.const import CONF_ID, CONF_TYPE, DEVICE_CLASS_CONNECTIVITY
 from .. import hid_telephony_ns, HIDTelephony
 
 DEPENDENCIES = ["hid_telephony"]
-CODEOWNERS = ["@AntorFr"]
+CODEOWNERS = ["@elpapimango"]
 
 CONF_HID_TELEPHONY_ID = "hid_telephony_id"
 

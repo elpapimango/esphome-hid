@@ -3,7 +3,7 @@ import esphome.config_validation as cv
 from esphome import automation
 from esphome.const import CONF_ID
 
-CODEOWNERS = ["@AntorFr"]
+CODEOWNERS = ["@elpapimango"]
 DEPENDENCIES = ["esp32"]
 
 # Cannot be used with other HID components (each configures USB)
@@ -18,6 +18,9 @@ UnmuteAction = hid_telephony_ns.class_("UnmuteAction", automation.Action)
 ToggleMuteAction = hid_telephony_ns.class_("ToggleMuteAction", automation.Action)
 MuteTelephonyAction = hid_telephony_ns.class_("MuteTelephonyAction", automation.Action)
 MuteConsumerAction = hid_telephony_ns.class_("MuteConsumerAction", automation.Action)
+MuteTeamsAction = hid_telephony_ns.class_("MuteTeamsAction", automation.Action)
+VolumeUpAction = hid_telephony_ns.class_("VolumeUpAction", automation.Action)
+VolumeDownAction = hid_telephony_ns.class_("VolumeDownAction", automation.Action)
 HookSwitchAction = hid_telephony_ns.class_("HookSwitchAction", automation.Action)
 HangUpAction = hid_telephony_ns.class_("HangUpAction", automation.Action)
 AnswerAction = hid_telephony_ns.class_("AnswerAction", automation.Action)
@@ -89,6 +92,42 @@ async def mute_telephony_action_to_code(config, action_id, template_arg, args):
     cv.Schema({cv.GenerateID(): cv.use_id(HIDTelephony)}),
 )
 async def mute_consumer_action_to_code(config, action_id, template_arg, args):
+    var = cg.new_Pvariable(action_id, template_arg)
+    await cg.register_parented(var, config[CONF_ID])
+    return var
+
+
+# Action: Mute Teams (Ctrl+Shift+M keyboard shortcut)
+@automation.register_action(
+    "hid_telephony.mute_teams",
+    MuteTeamsAction,
+    cv.Schema({cv.GenerateID(): cv.use_id(HIDTelephony)}),
+)
+async def mute_teams_action_to_code(config, action_id, template_arg, args):
+    var = cg.new_Pvariable(action_id, template_arg)
+    await cg.register_parented(var, config[CONF_ID])
+    return var
+
+
+# Action: Volume Up
+@automation.register_action(
+    "hid_telephony.volume_up",
+    VolumeUpAction,
+    cv.Schema({cv.GenerateID(): cv.use_id(HIDTelephony)}),
+)
+async def volume_up_action_to_code(config, action_id, template_arg, args):
+    var = cg.new_Pvariable(action_id, template_arg)
+    await cg.register_parented(var, config[CONF_ID])
+    return var
+
+
+# Action: Volume Down
+@automation.register_action(
+    "hid_telephony.volume_down",
+    VolumeDownAction,
+    cv.Schema({cv.GenerateID(): cv.use_id(HIDTelephony)}),
+)
+async def volume_down_action_to_code(config, action_id, template_arg, args):
     var = cg.new_Pvariable(action_id, template_arg)
     await cg.register_parented(var, config[CONF_ID])
     return var
