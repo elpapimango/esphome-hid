@@ -15,6 +15,15 @@
 
 esphome:
   name: test-composite-lamp-array-1led
+  # Force the LED on with the LampArray effect every boot, so it lights up
+  # as soon as it's plugged in instead of needing the effect picked by
+  # hand in Home Assistant (or wherever restore state lives).
+  on_boot:
+    priority: -100
+    then:
+      - light.turn_on:
+          id: strip
+          effect: "LampArray"
   build_flags:
     - -DCFG_TUD_HID=1
     # A LampArray multi-update report is 51 bytes with its report ID and has
