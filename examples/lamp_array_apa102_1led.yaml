@@ -1,0 +1,73 @@
+# USB HID LampArray, single APA102 RGB LED.
+#
+# Same protocol as lamp_array.yaml but for a board with one onboard APA102
+# instead of a WS2812 strip. APA102 is clocked (data + clock pins), unlike
+# WS2812's single-wire timing, so it uses the spi_led_strip light platform
+# (APA102-protocol SPI driver) over an SPI bus.
+#
+# Adjust clk_pin/mosi_pin below if your board wires them the other way
+# round, and swap the esp32.board line for your actual board.
+
+esphome:
+  name: test-lamp-array-1led
+  platformio_options:
+    build_flags:
+      - -DCFG_TUD_HID=1
+      - -DCFG_TUD_HID_EP_BUFSIZE=64
+
+esp32:
+  board: esp32-s3-devkitc-1
+  framework:
+    type: esp-idf
+    sdkconfig_options:
+      CONFIG_USJ_ENABLE_USB_SERIAL_JTAG: "n"
+      CONFIG_TINYUSB_HID_COUNT: "1"
+      CONFIG_ESP_CONSOLE_UART_DEFAULT: "y"
+    components:
+      - espressif/esp_tinyusb~2.0.0
+
+logger:
+  hardware_uart: UART0
+
+external_components:
+  - source:
+      type: local
+      path: ../components
+    components: [hid_lamp_array]
+
+hid_lamp_array:
+  id: my_lamps
+  lamp_count: 1
+  kind: PERIPHERAL
+  # Single point, no real spatial extent — width/height just need one
+  # nonzero dimension to satisfy the schema.
+  width: 10mm
+  height: 10mm
+  depth: 10mm
+  rows: 1
+  purposes: [ACCENT]
+  min_update_interval: 33ms
+
+spi:
+  clk_pin: GPIO39
+  mosi_pin: GPIO40
+
+light:
+  - platform: spi_led_strip
+    id: strip
+    name: "RGB LED"
+    num_leds: 1
+    effects:
+      - lamp_array:
+          lamp_array_id: my_lamps
+          offset: 0
+      - random:
+
+binary_sensor:
+  - platform: hid_lamp_array
+    type: connected
+    name: "PC Connected"
+
+  - platform: hid_lamp_array
+    type: autonomous
+    name: "Lighting Self-Controlled"
