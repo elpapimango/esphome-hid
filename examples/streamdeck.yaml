@@ -1,4 +1,4 @@
-# An ESP32-S3 that the PC sees as a Stream Deck XL; every key is a button in Home Assistant.
+# An ESP32-S3 that the PC sees as a Stream Deck XL (32 keys); every key is a button in Home Assistant.
 # The native USB port is the Stream Deck; flash over the board's UART port (or hold BOOT while plugging in the native one).
 esphome:
   name: esp-streamdeck
@@ -56,64 +56,133 @@ sensor:
       name: "Stream Deck images received"
 
 button:
-  # The 15 keys of a regular Stream Deck (3 rows x 5 columns) in the top-left corner of the XL's 4 x 8 grid.
+  # All 32 keys of the XL, named by their place on the grid: "Key R<row>C<column>", row 0 at the top, column 0 at the left.
+  # Generated with: python tools/gen_streamdeck_buttons.py
   - platform: hid_streamdeck
-    name: "Key 1"
+    name: "Key R0C0"
     row: 0
     column: 0
   - platform: hid_streamdeck
-    name: "Key 2"
+    name: "Key R0C1"
     row: 0
     column: 1
   - platform: hid_streamdeck
-    name: "Key 3"
+    name: "Key R0C2"
     row: 0
     column: 2
   - platform: hid_streamdeck
-    name: "Key 4"
+    name: "Key R0C3"
     row: 0
     column: 3
   - platform: hid_streamdeck
-    name: "Key 5"
+    name: "Key R0C4"
     row: 0
     column: 4
   - platform: hid_streamdeck
-    name: "Key 6"
+    name: "Key R0C5"
+    row: 0
+    column: 5
+  - platform: hid_streamdeck
+    name: "Key R0C6"
+    row: 0
+    column: 6
+  - platform: hid_streamdeck
+    name: "Key R0C7"
+    row: 0
+    column: 7
+  - platform: hid_streamdeck
+    name: "Key R1C0"
     row: 1
     column: 0
   - platform: hid_streamdeck
-    name: "Key 7"
+    name: "Key R1C1"
     row: 1
     column: 1
   - platform: hid_streamdeck
-    name: "Key 8"
+    name: "Key R1C2"
     row: 1
     column: 2
   - platform: hid_streamdeck
-    name: "Key 9"
+    name: "Key R1C3"
     row: 1
     column: 3
   - platform: hid_streamdeck
-    name: "Key 10"
+    name: "Key R1C4"
     row: 1
     column: 4
   - platform: hid_streamdeck
-    name: "Key 11"
+    name: "Key R1C5"
+    row: 1
+    column: 5
+  - platform: hid_streamdeck
+    name: "Key R1C6"
+    row: 1
+    column: 6
+  - platform: hid_streamdeck
+    name: "Key R1C7"
+    row: 1
+    column: 7
+  - platform: hid_streamdeck
+    name: "Key R2C0"
     row: 2
     column: 0
   - platform: hid_streamdeck
-    name: "Key 12"
+    name: "Key R2C1"
     row: 2
     column: 1
   - platform: hid_streamdeck
-    name: "Key 13"
+    name: "Key R2C2"
     row: 2
     column: 2
   - platform: hid_streamdeck
-    name: "Key 14"
+    name: "Key R2C3"
     row: 2
     column: 3
   - platform: hid_streamdeck
-    name: "Key 15"
+    name: "Key R2C4"
     row: 2
     column: 4
+  - platform: hid_streamdeck
+    name: "Key R2C5"
+    row: 2
+    column: 5
+  - platform: hid_streamdeck
+    name: "Key R2C6"
+    row: 2
+    column: 6
+  - platform: hid_streamdeck
+    name: "Key R2C7"
+    row: 2
+    column: 7
+  - platform: hid_streamdeck
+    name: "Key R3C0"
+    row: 3
+    column: 0
+  - platform: hid_streamdeck
+    name: "Key R3C1"
+    row: 3
+    column: 1
+  - platform: hid_streamdeck
+    name: "Key R3C2"
+    row: 3
+    column: 2
+  - platform: hid_streamdeck
+    name: "Key R3C3"
+    row: 3
+    column: 3
+  - platform: hid_streamdeck
+    name: "Key R3C4"
+    row: 3
+    column: 4
+  - platform: hid_streamdeck
+    name: "Key R3C5"
+    row: 3
+    column: 5
+  - platform: hid_streamdeck
+    name: "Key R3C6"
+    row: 3
+    column: 6
+  - platform: hid_streamdeck
+    name: "Key R3C7"
+    row: 3
+    column: 7

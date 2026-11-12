@@ -85,7 +85,7 @@ async def main():
 
     dev.set_nonblocking(True)
     read_all(dev, 0.3)  # drop what is pending
-    for name, index in [("Key 1", 0), ("Key 6", 8), ("Key 15", 20)]:
+    for name, index in [("Key R0C0", 0), ("Key R1C0", 8), ("Key R2C4", 20), ("Key R3C7", 31)]:
         api.button_command(by_name[name].key)
         reports = await asyncio.get_running_loop().run_in_executor(None, read_all, dev, 0.5)
         down = [i for r in reports for i, b in enumerate(r[4:36]) if b]

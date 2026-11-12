@@ -297,7 +297,7 @@ hid_streamdeck:
 
 button:
   - platform: hid_streamdeck
-    name: "Key 1"
+    name: "Key R0C0"
     row: 0            # or: key: 0   (index = row * 8 + column)
     column: 0
     hold_time: 80ms   # between the press and the release (default 80 ms)
@@ -314,7 +314,7 @@ sensor:
 ```
 
 Needs `-DCFG_TUD_HID_EP_BUFSIZE=1024` in the build flags (a key image is a 1024-byte output report, the key report 512 bytes);
-`examples/streamdeck.yaml` has it all, including 15 buttons laid out as a regular 15-key deck in the XL's top-left corner.
+`examples/streamdeck.yaml` has it all, including all 32 buttons named `Key R<row>C<column>` (generate them with `tools/gen_streamdeck_buttons.py`).
 
 Limits of this first version:
 - **Full-Speed only.** The real XL is High-Speed with 512/1024-byte endpoints; the ESP32-S3 offers 64-byte endpoints, so reports
@@ -322,8 +322,8 @@ Limits of this first version:
 - **No display.** Key images from the host are counted (`images`), not drawn or kept. Brightness is reported, not applied.
 - **The ids are Elgato's** (`vendor_id`, `product_id` can be changed). The official software only talks to those; do not
   distribute devices or firmware that present them as a genuine product.
-- **Key numbers.** A regular 15-key deck would be 3 x 5; this mimics the XL (what a real dump exists for), so the software
-  shows an XL layout and the 15 keys occupy its top-left corner.
+- **An XL, so 32 keys.** A real dump exists for the XL, so that is what is mimicked: 4 rows x 8 columns, key index = row * 8 +
+  column. (A regular 15-key deck would be 3 x 5; its descriptor is not known from hardware.)
 
 ## Binary Sensors
 
