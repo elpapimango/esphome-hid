@@ -39,6 +39,7 @@ class HIDStreamDeck : public Component {
 
   // Called from the TinyUSB task.
   void on_out_data(const uint8_t *data, uint16_t length, bool has_report_id);
+  void note_set_report(uint8_t report_id, uint8_t report_type, uint16_t length);
   void on_feature_set(uint8_t report_id, const uint8_t *data, uint16_t length);
   uint16_t on_feature_get(uint8_t report_id, uint8_t *buffer, uint16_t length);
   const std::string &serial() const { return this->serial_; }
@@ -59,6 +60,10 @@ class HIDStreamDeck : public Component {
 
   std::atomic<int> brightness_{-1};
   std::atomic<uint32_t> images_{0}, image_chunks_{0}, out_rejected_{0}, features_set_{0};
+  // what the TinyUSB callbacks last saw, logged from loop() (they must not log or touch entities themselves)
+  std::atomic<uint32_t> set_report_calls_{0}, out_calls_{0}, out_last_len_{0}, out_last_head_{0}, other_set_{0};
+  std::atomic<uint32_t> last_type_id_{0};
+  uint32_t diag_published_{0};
   int brightness_published_{-2};
   uint32_t images_published_{UINT32_MAX};
 

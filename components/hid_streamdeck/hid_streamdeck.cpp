@@ -75,13 +75,15 @@ uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id, hid_report_t
 void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id, hid_report_type_t report_type, uint8_t const *buffer,
                            uint16_t bufsize) {
   if (g_deck == nullptr) return;
+  g_deck->note_set_report(report_id, report_type, bufsize);
   if (report_type == HID_REPORT_TYPE_FEATURE) {
     g_deck->on_feature_set(report_id, buffer, bufsize);
   } else if (report_type == HID_REPORT_TYPE_INVALID && report_id == 0) {
-    // data that arrived on the OUT endpoint: the stack does not strip the report id there
+    // older stacks: raw data of the OUT endpoint, report id in front
     g_deck->on_out_data(buffer, bufsize, true);
   } else if (report_type == HID_REPORT_TYPE_OUTPUT) {
-    g_deck->on_out_data(buffer, bufsize, false);
+    // Seen on the board: data of the OUT endpoint arrives as type OUTPUT with report id 0 and the id still in front.
+    g_deck->on_out_data(buffer, bufsize, report_id == 0);
   }
 }
 
@@ -172,6 +174,15 @@ void HIDStreamDeck::loop() {
     this->brightness_published_ = brightness;
     if (this->brightness_sensor_ != nullptr && brightness >= 0) this->brightness_sensor_->publish_state(brightness);
   }
+  uint32_t diag = this->set_report_calls_.load() + this->out_rejected_.load() + this->image_chunks_.load();
+  if (diag != this->diag_published_) {
+    this->diag_published_ = diag;
+    uint32_t t = this->last_type_id_.load();
+    ESP_LOGD(TAG, "set_report calls=%u (last type=%u id=%u) out_calls=%u last_len=%u head=%08X rejected=%u chunks=%u other=%u",
+             (unsigned) this->set_report_calls_.load(), (unsigned) (t >> 8), (unsigned) (t & 0xFF), (unsigned) this->out_calls_.load(),
+             (unsigned) this->out_last_len_.load(), (unsigned) this->out_last_head_.load(), (unsigned) this->out_rejected_.load(),
+             (unsigned) this->image_chunks_.load(), (unsigned) this->other_set_.load());
+  }
   uint32_t images = this->images_.load();
   if (images != this->images_published_) {
     this->images_published_ = images;
@@ -216,7 +227,20 @@ void HIDStreamDeck::on_feature_set(uint8_t report_id, const uint8_t *data, uint1
   }
 }
 
+void HIDStreamDeck::note_set_report(uint8_t report_id, uint8_t report_type, uint16_t length) {
+  this->set_report_calls_++;
+  this->last_type_id_.store(((uint32_t) report_type << 8) | report_id);
+  if (report_type != HID_REPORT_TYPE_FEATURE && report_type != HID_REPORT_TYPE_OUTPUT && report_type != HID_REPORT_TYPE_INVALID)
+    this->other_set_++;
+  (void) length;
+}
+
 void HIDStreamDeck::on_out_data(const uint8_t *data, uint16_t length, bool has_report_id) {
+  this->out_calls_++;
+  this->out_last_len_.store(length);
+  uint32_t head = 0;
+  for (uint16_t i = 0; i < 4 && i < length; i++) head |= (uint32_t) data[i] << (8 * i);
+  this->out_last_head_.store(head);
   // Output report 2 is 1024 bytes: [02][07 key last len_lo len_hi page_lo page_hi][payload ...], and may arrive in pieces.
   uint16_t at = 0;
   if (!has_report_id && this->out_len_ == 0) {
