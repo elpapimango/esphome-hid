@@ -11,6 +11,7 @@ ESPHome external components to simulate USB HID devices (mouse, keyboard, teleph
 | `hid_composite` | USB HID Mouse + Keyboard + Telephony (+ optional LampArray) combined |
 | `hid_telephony` | USB HID Telephony only (mute/call control) |
 | `hid_lamp_array` | USB HID LampArray only (Windows Dynamic Lighting) |
+| `hid_streamdeck` | The PC sees an Elgato Stream Deck XL; every key is a button in Home Assistant (see [Stream Deck](#stream-deck)) |
 
 > **Note**: These components are mutually exclusive. Use only ONE of them in your configuration.
 
@@ -280,6 +281,49 @@ light:
 Select the effect and Windows drives the strip. While the host has *not* claimed
 the lamps (autonomous mode) the effect paints the light's own colour instead, so
 it is safe to leave selected permanently.
+
+## Stream Deck
+
+`hid_streamdeck` makes the ESP32-S3 enumerate as an **Elgato Stream Deck XL** (`0FD9:006C`, 32 keys in 4 rows x 8 columns). The
+HID report descriptor and the answers to the feature reports are replayed from a read-only dump of a real XL
+([streamdeck-xl-mimic](https://github.com/elpapimango/streamdeck-xl-mimic)); only the serial number is the board's own. The PC's
+Stream Deck software (or OpenDeck) sees a deck, and each key is a **button** in ESPHome: pressing it in Home Assistant sends a
+key press (and, after `hold_time`, the release) to the PC, where the software runs whatever the key is set to do.
+
+```yaml
+hid_streamdeck:
+  id: deck
+  # serial: "ESPD12345678"      # 12 characters; default made from the MAC address
+
+button:
+  - platform: hid_streamdeck
+    name: "Key 1"
+    row: 0            # or: key: 0   (index = row * 8 + column)
+    column: 0
+    hold_time: 80ms   # between the press and the release (default 80 ms)
+
+binary_sensor:
+  - platform: hid_streamdeck
+    connected:
+      name: "Stream Deck connected"      # the PC has the deck mounted and not suspended
+
+sensor:
+  - platform: hid_streamdeck
+    brightness: {name: "Stream Deck brightness"}   # what the host set (percent)
+    images:     {name: "Stream Deck images received"}  # key images the host sent
+```
+
+Needs `-DCFG_TUD_HID_EP_BUFSIZE=1024` in the build flags (a key image is a 1024-byte output report, the key report 512 bytes);
+`examples/streamdeck.yaml` has it all, including 15 buttons laid out as a regular 15-key deck in the XL's top-left corner.
+
+Limits of this first version:
+- **Full-Speed only.** The real XL is High-Speed with 512/1024-byte endpoints; the ESP32-S3 offers 64-byte endpoints, so reports
+  are split into packets. Whether the official software accepts that is what the first test is for.
+- **No display.** Key images from the host are counted (`images`), not drawn or kept. Brightness is reported, not applied.
+- **The ids are Elgato's** (`vendor_id`, `product_id` can be changed). The official software only talks to those; do not
+  distribute devices or firmware that present them as a genuine product.
+- **Key numbers.** A regular 15-key deck would be 3 x 5; this mimics the XL (what a real dump exists for), so the software
+  shows an XL layout and the 15 keys occupy its top-left corner.
 
 ## Binary Sensors
 

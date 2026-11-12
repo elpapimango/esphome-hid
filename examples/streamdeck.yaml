@@ -1,0 +1,119 @@
+# An ESP32-S3 that the PC sees as a Stream Deck XL; every key is a button in Home Assistant.
+# The native USB port is the Stream Deck; flash over the board's UART port (or hold BOOT while plugging in the native one).
+esphome:
+  name: esp-streamdeck
+  friendly_name: ESP Stream Deck
+  platformio_options:
+    build_flags:
+      - -DCFG_TUD_HID=1
+      # the 1024-byte output report (key images) and the 512-byte input report each go in one transfer
+      - -DCFG_TUD_HID_EP_BUFSIZE=1024
+
+esp32:
+  board: esp32-s3-devkitc-1
+  framework:
+    type: esp-idf
+    sdkconfig_options:
+      CONFIG_USJ_ENABLE_USB_SERIAL_JTAG: "n"
+      CONFIG_TINYUSB_HID_COUNT: "1"
+      CONFIG_ESP_CONSOLE_UART_DEFAULT: "y"
+    components:
+      - espressif/esp_tinyusb~2.0.0
+
+logger:
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+external_components:
+  - source:
+      type: local
+      path: ../components
+    components: [hid_streamdeck]
+
+hid_streamdeck:
+  id: deck
+
+binary_sensor:
+  - platform: hid_streamdeck
+    connected:
+      name: "Stream Deck connected"
+
+sensor:
+  - platform: hid_streamdeck
+    brightness:
+      name: "Stream Deck brightness"
+    images:
+      name: "Stream Deck images received"
+
+button:
+  # The 15 keys of a regular Stream Deck (3 rows x 5 columns) in the top-left corner of the XL's 4 x 8 grid.
+  - platform: hid_streamdeck
+    name: "Key 1"
+    row: 0
+    column: 0
+  - platform: hid_streamdeck
+    name: "Key 2"
+    row: 0
+    column: 1
+  - platform: hid_streamdeck
+    name: "Key 3"
+    row: 0
+    column: 2
+  - platform: hid_streamdeck
+    name: "Key 4"
+    row: 0
+    column: 3
+  - platform: hid_streamdeck
+    name: "Key 5"
+    row: 0
+    column: 4
+  - platform: hid_streamdeck
+    name: "Key 6"
+    row: 1
+    column: 0
+  - platform: hid_streamdeck
+    name: "Key 7"
+    row: 1
+    column: 1
+  - platform: hid_streamdeck
+    name: "Key 8"
+    row: 1
+    column: 2
+  - platform: hid_streamdeck
+    name: "Key 9"
+    row: 1
+    column: 3
+  - platform: hid_streamdeck
+    name: "Key 10"
+    row: 1
+    column: 4
+  - platform: hid_streamdeck
+    name: "Key 11"
+    row: 2
+    column: 0
+  - platform: hid_streamdeck
+    name: "Key 12"
+    row: 2
+    column: 1
+  - platform: hid_streamdeck
+    name: "Key 13"
+    row: 2
+    column: 2
+  - platform: hid_streamdeck
+    name: "Key 14"
+    row: 2
+    column: 3
+  - platform: hid_streamdeck
+    name: "Key 15"
+    row: 2
+    column: 4

@@ -9,7 +9,7 @@ CODEOWNERS = ["@AntorFr"]
 DEPENDENCIES = ["esp32"]
 
 # Cannot be used with other HID components (each configures USB)
-CONFLICTS_WITH = ["hid_mouse", "hid_keyboard", "hid_telephony", "hid_composite"]
+CONFLICTS_WITH = ["hid_mouse", "hid_keyboard", "hid_telephony", "hid_composite", "hid_streamdeck"]
 
 hid_lamp_array_ns = cg.esphome_ns.namespace("hid_lamp_array")
 Color = cg.esphome_ns.class_("Color")

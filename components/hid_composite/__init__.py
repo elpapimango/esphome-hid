@@ -8,7 +8,7 @@ import esphome.final_validate as fv
 
 CODEOWNERS = ["@AntorFr"]
 DEPENDENCIES = ["esp32"]
-CONFLICTS_WITH = ["hid_mouse", "hid_keyboard", "hid_telephony", "hid_lamp_array"]
+CONFLICTS_WITH = ["hid_mouse", "hid_keyboard", "hid_telephony", "hid_lamp_array", "hid_streamdeck"]
 
 CONF_LAYOUT = "layout"
 
