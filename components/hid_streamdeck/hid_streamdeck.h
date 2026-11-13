@@ -1,7 +1,11 @@
 #pragma once
 
 #include <atomic>
+#include <mutex>
 #include <string>
+#include <vector>
+
+#include "esp_http_server.h"
 
 #include "esphome/components/binary_sensor/binary_sensor.h"
 #include "esphome/components/button/button.h"
@@ -29,6 +33,11 @@ class HIDStreamDeck : public Component {
   void set_connected_sensor(binary_sensor::BinarySensor *s) { this->connected_sensor_ = s; }
   void set_brightness_sensor(sensor::Sensor *s) { this->brightness_sensor_ = s; }
   void set_images_sensor(sensor::Sensor *s) { this->images_sensor_ = s; }
+  /// Serve the last key images as JPEG over HTTP on this port (0 = off).
+  void set_image_port(uint16_t port) { this->image_port_ = port; }
+  /// The newest JPEG for `key` (empty if none yet); called from the HTTP task.
+  bool copy_image(uint8_t key, std::vector<uint8_t> &out, uint32_t &version);
+  uint32_t image_version(uint8_t key);
 
   /// The PC has the deck mounted and is not suspended.
   bool is_connected() const;
@@ -46,6 +55,14 @@ class HIDStreamDeck : public Component {
 
  protected:
   void handle_image_report_(const uint8_t *report);
+  void start_http_();
+
+  uint16_t image_port_{0};
+  httpd_handle_t httpd_{nullptr};
+  std::mutex image_mutex_;
+  std::vector<uint8_t> assembling_[KEY_COUNT];  // only touched by the TinyUSB task
+  std::vector<uint8_t> image_[KEY_COUNT];       // finished JPEGs, guarded by image_mutex_
+  uint32_t image_ver_[KEY_COUNT]{};
 
   std::string serial_;
   uint16_t vendor_id_{0x0FD9}, product_id_{0x006C};

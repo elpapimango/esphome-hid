@@ -321,6 +321,25 @@ on its own, `tools/test_streamdeck.py` passes (feature reports equal a real XL's
 Assistant dashboard button set up in the software to start `explorer.exe` starts Explorer on the PC (a slight delay from the
 network path was noticed, not measured).
 
+### Key images in Home Assistant
+
+Set `image_port: 8080` on `hid_streamdeck`. The component keeps the last JPEG the PC sent for each key (96x96) and serves it at
+`http://<device>:8080/key/<n>.jpg` (n = row * 8 + column, 0 to 31); `http://<device>:8080/` shows all keys. Nothing is animated: you
+get the newest frame, and Home Assistant decides how often to fetch it. The images are stored as the XL sends them, which is
+rotated 180 degrees, so turn them in the dashboard. Example (picture-elements or a markdown card; refresh by a 30 s `?t=` is not needed,
+the `generic` camera integration polls by itself):
+
+```yaml
+# configuration.yaml
+camera:
+  - platform: generic
+    name: Deck Key R0C0
+    still_image_url: http://192.168.0.115:8080/key/0.jpg
+    framerate: 0.033   # one frame every 30 s
+```
+
+Dashboard card: `type: picture-entity`, `entity: camera.deck_key_r0c0`, with `card_mod: style: "img { transform: rotate(180deg); }"`.
+
 Limits of this first version:
 - **Full-Speed only.** The real XL is High-Speed with 512/1024-byte endpoints; the ESP32-S3 offers 64-byte endpoints, so reports
   are split into packets. Whether the official software accepts that is what the first test is for.

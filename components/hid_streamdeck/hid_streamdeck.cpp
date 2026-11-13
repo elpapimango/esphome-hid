@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstring>
 
+#include "esphome/components/network/util.h"
 #include "esphome/core/log.h"
 #include "esp_mac.h"
 #include "tinyusb.h"
@@ -134,6 +135,7 @@ void HIDStreamDeck::dump_config() {
   ESP_LOGCONFIG(TAG, "HID Stream Deck (XL, %u keys):", KEY_COUNT);
   ESP_LOGCONFIG(TAG, "  USB id: %04X:%04X", this->vendor_id_, this->product_id_);
   ESP_LOGCONFIG(TAG, "  Serial: %s", this->serial_.c_str());
+  ESP_LOGCONFIG(TAG, "  Key image server port: %u (0 = off)", this->image_port_);
 }
 
 bool HIDStreamDeck::is_connected() const { return this->initialized_ && tud_mounted() && !tud_suspended(); }
@@ -153,6 +155,7 @@ void HIDStreamDeck::tap(uint8_t key, uint32_t hold_ms) {
 
 void HIDStreamDeck::loop() {
   if (!this->initialized_) return;
+  if (this->image_port_ != 0 && this->httpd_ == nullptr && network::is_connected()) this->start_http_();
 
   // key states: the report as the real XL sends it (report id 1, 511 bytes: 00, key count, 00, one byte per key)
   if (this->dirty_ && tud_mounted() && tud_hid_ready()) {
@@ -266,7 +269,86 @@ void HIDStreamDeck::on_out_data(const uint8_t *data, uint16_t length, bool has_r
 void HIDStreamDeck::handle_image_report_(const uint8_t *r) {
   if (r[1] != 0x07) return;  // "set key image" is the only output command seen
   this->image_chunks_++;
+  uint8_t key = r[2];
+  uint16_t len = r[4] | (r[5] << 8);
+  uint16_t page = r[6] | (r[7] << 8);
+  if (len > 1016) len = 1016;
+  if (key < KEY_COUNT && this->image_port_ != 0) {
+    auto &buf = this->assembling_[key];
+    if (page == 0) buf.clear();
+    if (buf.size() + len <= 32 * 1024) buf.insert(buf.end(), r + 8, r + 8 + len);
+    if (r[3] == 1) {
+      std::lock_guard<std::mutex> lock(this->image_mutex_);
+      this->image_[key] = std::move(buf);
+      buf.clear();
+      this->image_ver_[key]++;
+    }
+  }
   if (r[3] == 1) this->images_++;  // the last chunk of one image
+}
+
+bool HIDStreamDeck::copy_image(uint8_t key, std::vector<uint8_t> &out, uint32_t &version) {
+  if (key >= KEY_COUNT) return false;
+  std::lock_guard<std::mutex> lock(this->image_mutex_);
+  out = this->image_[key];
+  version = this->image_ver_[key];
+  return !out.empty();
+}
+
+uint32_t HIDStreamDeck::image_version(uint8_t key) {
+  std::lock_guard<std::mutex> lock(this->image_mutex_);
+  return key < KEY_COUNT ? this->image_ver_[key] : 0;
+}
+
+static esp_err_t image_handler(httpd_req_t *req) {
+  auto *deck = static_cast<HIDStreamDeck *>(req->user_ctx);
+  const char *uri = req->uri;  // /key/<n>.jpg
+  int n = -1;
+  if (sscanf(uri, "/key/%d", &n) != 1 || n < 0 || n >= KEY_COUNT) {
+    httpd_resp_send_404(req);
+    return ESP_OK;
+  }
+  std::vector<uint8_t> jpeg;
+  uint32_t ver = 0;
+  if (!deck->copy_image(n, jpeg, ver)) {
+    httpd_resp_set_status(req, "404 Not Found");
+    httpd_resp_send(req, "no image for this key yet", HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+  }
+  httpd_resp_set_type(req, "image/jpeg");
+  httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
+  return httpd_resp_send(req, (const char *) jpeg.data(), jpeg.size());
+}
+
+static esp_err_t index_handler(httpd_req_t *req) {
+  auto *deck = static_cast<HIDStreamDeck *>(req->user_ctx);
+  std::string page = "<html><body style='font-family:sans-serif'><h3>Stream Deck key images</h3>";
+  char tmp[160];
+  for (uint8_t k = 0; k < KEY_COUNT; k++) {
+    snprintf(tmp, sizeof tmp, "<div style='display:inline-block;margin:4px;text-align:center'>R%uC%u<br><img width=96 src='/key/%u.jpg'></div>",
+             k / 8, k % 8, k);
+    page += tmp;
+    if (k % 8 == 7) page += "<br>";
+  }
+  page += "</body></html>";
+  httpd_resp_set_type(req, "text/html");
+  return httpd_resp_send(req, page.c_str(), page.size());
+}
+
+void HIDStreamDeck::start_http_() {
+  httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
+  cfg.server_port = this->image_port_;
+  cfg.ctrl_port = this->image_port_ + 1;
+  cfg.uri_match_fn = httpd_uri_match_wildcard;
+  if (httpd_start(&this->httpd_, &cfg) != ESP_OK) {
+    ESP_LOGE(TAG, "Could not start the image server on port %u", this->image_port_);
+    return;
+  }
+  httpd_uri_t key_uri = {.uri = "/key/*", .method = HTTP_GET, .handler = image_handler, .user_ctx = this};
+  httpd_uri_t index_uri = {.uri = "/", .method = HTTP_GET, .handler = index_handler, .user_ctx = this};
+  httpd_register_uri_handler(this->httpd_, &key_uri);
+  httpd_register_uri_handler(this->httpd_, &index_uri);
+  ESP_LOGI(TAG, "Key images at http://%s:%u/key/<n>.jpg", network::get_use_address(), this->image_port_);
 }
 
 void HIDStreamDeckButton::dump_config() {

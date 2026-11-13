@@ -42,6 +42,7 @@ external_components:
 
 hid_streamdeck:
   id: deck
+  image_port: 8080  # http://<device>:8080/ shows the key images the PC sent
 
 binary_sensor:
   - platform: hid_streamdeck

@@ -8,13 +8,14 @@ import esphome.config_validation as cv
 from esphome.const import CONF_ID
 
 CODEOWNERS = []
-DEPENDENCIES = ["esp32"]
+DEPENDENCIES = ["esp32", "network"]
 CONFLICTS_WITH = ["hid_mouse", "hid_keyboard", "hid_telephony", "hid_lamp_array", "hid_composite"]
 
 CONF_SERIAL = "serial"
 CONF_VENDOR_ID = "vendor_id"
 CONF_PRODUCT_ID = "product_id"
 CONF_HID_STREAMDECK_ID = "hid_streamdeck_id"
+CONF_IMAGE_PORT = "image_port"
 
 hid_streamdeck_ns = cg.esphome_ns.namespace("hid_streamdeck")
 HIDStreamDeck = hid_streamdeck_ns.class_("HIDStreamDeck", cg.Component)
@@ -28,6 +29,8 @@ CONFIG_SCHEMA = cv.Schema(
         # or distributing anything built with them.
         cv.Optional(CONF_VENDOR_ID, default=0x0FD9): cv.hex_uint16_t,
         cv.Optional(CONF_PRODUCT_ID, default=0x006C): cv.hex_uint16_t,
+        # HTTP port that serves the last image the PC sent for each key, as /key/<n>.jpg (96x96 JPEG). 0 = off.
+        cv.Optional(CONF_IMAGE_PORT, default=0): cv.port,
     }
 ).extend(cv.COMPONENT_SCHEMA)
 
@@ -37,4 +40,5 @@ async def to_code(config):
     await cg.register_component(var, config)
     if CONF_SERIAL in config:
         cg.add(var.set_serial(config[CONF_SERIAL]))
+    cg.add(var.set_image_port(config[CONF_IMAGE_PORT]))
     cg.add(var.set_ids(config[CONF_VENDOR_ID], config[CONF_PRODUCT_ID]))
