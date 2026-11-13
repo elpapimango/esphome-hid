@@ -9,6 +9,7 @@
 #include "tinyusb.h"
 #include "class/hid/hid_device.h"
 
+#include "jpeg_rotate.h"
 #include "xl_data.h"
 
 // A 1024-byte output report (key images) has to fit one transfer, and so does the 512-byte input report: set
@@ -135,7 +136,7 @@ void HIDStreamDeck::dump_config() {
   ESP_LOGCONFIG(TAG, "HID Stream Deck (XL, %u keys):", KEY_COUNT);
   ESP_LOGCONFIG(TAG, "  USB id: %04X:%04X", this->vendor_id_, this->product_id_);
   ESP_LOGCONFIG(TAG, "  Serial: %s", this->serial_.c_str());
-  ESP_LOGCONFIG(TAG, "  Key image server port: %u (0 = off)", this->image_port_);
+  ESP_LOGCONFIG(TAG, "  Key image server port: %u (0 = off), rotation %u", this->image_port_, this->image_rotation_);
 }
 
 bool HIDStreamDeck::is_connected() const { return this->initialized_ && tud_mounted() && !tud_suspended(); }
@@ -315,6 +316,13 @@ static esp_err_t image_handler(httpd_req_t *req) {
     httpd_resp_send(req, "no image for this key yet", HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
   }
+  if (deck->image_rotation() == 180) {
+    // The deck software sends the XL's keys upside down (the XL's screens are mounted that way). Turn them back,
+    // losslessly; if the file is not one the rotation handles, the original goes out.
+    std::vector<uint8_t> turned;
+    if (jpegrot::rotate180(jpeg.data(), jpeg.size(), turned)) jpeg.swap(turned);
+    else ESP_LOGW(TAG, "key %d: image not rotated (unsupported JPEG layout)", n);
+  }
   httpd_resp_set_type(req, "image/jpeg");
   httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
   return httpd_resp_send(req, (const char *) jpeg.data(), jpeg.size());
@@ -338,6 +346,7 @@ static esp_err_t index_handler(httpd_req_t *req) {
 void HIDStreamDeck::start_http_() {
   httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
   cfg.server_port = this->image_port_;
+  cfg.stack_size = 6144;  // the rotation needs a little more than the default 4096
   cfg.ctrl_port = this->image_port_ + 1;
   cfg.uri_match_fn = httpd_uri_match_wildcard;
   if (httpd_start(&this->httpd_, &cfg) != ESP_OK) {

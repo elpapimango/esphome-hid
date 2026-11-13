@@ -35,6 +35,9 @@ class HIDStreamDeck : public Component {
   void set_images_sensor(sensor::Sensor *s) { this->images_sensor_ = s; }
   /// Serve the last key images as JPEG over HTTP on this port (0 = off).
   void set_image_port(uint16_t port) { this->image_port_ = port; }
+  /// 0 or 180: turn the served images (lossless, on the JPEG coefficients).
+  void set_image_rotation(uint16_t deg) { this->image_rotation_ = deg; }
+  uint16_t image_rotation() const { return this->image_rotation_; }
   /// The newest JPEG for `key` (empty if none yet); called from the HTTP task.
   bool copy_image(uint8_t key, std::vector<uint8_t> &out, uint32_t &version);
   uint32_t image_version(uint8_t key);
@@ -58,6 +61,7 @@ class HIDStreamDeck : public Component {
   void start_http_();
 
   uint16_t image_port_{0};
+  uint16_t image_rotation_{0};
   httpd_handle_t httpd_{nullptr};
   std::mutex image_mutex_;
   std::vector<uint8_t> assembling_[KEY_COUNT];  // only touched by the TinyUSB task

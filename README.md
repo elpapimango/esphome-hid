@@ -326,8 +326,11 @@ network path was noticed, not measured).
 Set `image_port: 8080` on `hid_streamdeck`. The component keeps the last JPEG the PC sent for each key (96x96) and serves it at
 `http://<device>:8080/key/<n>.jpg` (n = row * 8 + column, 0 to 31); `http://<device>:8080/` shows all keys. Nothing is animated: you
 get the newest frame, and Home Assistant decides how often to fetch it. The images are stored as the XL sends them, which is
-rotated 180 degrees, so turn them in the dashboard. Example (picture-elements or a markdown card; refresh by a 30 s `?t=` is not needed,
-the `generic` camera integration polls by itself):
+rotated 180 degrees; set `image_rotation: 180` to have the chip turn them upright when it serves them (default `0` = as sent).
+The turn is lossless: it works on the JPEG's DCT coefficients and Huffman-codes them again with the tables already in the file, so
+there is no quality loss and no decoder on the chip (`jpeg_rotate.h`, tested on a PC against Pillow with `tools/test_jpeg_rotate.cpp`;
+it handles baseline JPEGs whose size is a multiple of the MCU, which is what the deck software sends, and serves the original
+unchanged for anything else). Example (the `generic` camera integration polls by itself, no `?t=` is needed):
 
 ```yaml
 # configuration.yaml
@@ -335,10 +338,11 @@ camera:
   - platform: generic
     name: Deck Key R0C0
     still_image_url: http://192.168.0.115:8080/key/0.jpg
-    framerate: 0.033   # one frame every 30 s
+    framerate: 0.2   # one frame every 5 s
 ```
 
-Dashboard card: `type: picture-entity`, `entity: camera.deck_key_r0c0`, with `card_mod: style: "img { transform: rotate(180deg); }"`.
+Dashboard card: `type: picture-entity`, `entity: camera.deck_key_r0c0`. With `image_rotation: 0` add
+`card_mod: style: "img { transform: rotate(180deg); }"`.
 
 Limits of this first version:
 - **Full-Speed only.** The real XL is High-Speed with 512/1024-byte endpoints; the ESP32-S3 offers 64-byte endpoints, so reports

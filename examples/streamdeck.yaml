@@ -43,6 +43,7 @@ external_components:
 hid_streamdeck:
   id: deck
   image_port: 8080  # http://<device>:8080/ shows the key images the PC sent
+  image_rotation: 180  # serve them upright (the XL's own orientation is upside down); 0 = as sent
 
 binary_sensor:
   - platform: hid_streamdeck
