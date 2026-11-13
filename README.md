@@ -316,6 +316,11 @@ sensor:
 Needs `-DCFG_TUD_HID_EP_BUFSIZE=1024` in the build flags (a key image is a 1024-byte output report, the key report 512 bytes);
 `examples/streamdeck.yaml` has it all, including all 32 buttons named `Key R<row>C<column>` (generate them with `tools/gen_streamdeck_buttons.py`).
 
+Verified on an ESP32-S3 (native USB port) with Windows and the official Stream Deck software: the software connects to it as a Stream Deck XL
+on its own, `tools/test_streamdeck.py` passes (feature reports equal a real XL's, key reports, brightness, key images), and a Home
+Assistant dashboard button set up in the software to start `explorer.exe` starts Explorer on the PC (a slight delay from the
+network path was noticed, not measured).
+
 Limits of this first version:
 - **Full-Speed only.** The real XL is High-Speed with 512/1024-byte endpoints; the ESP32-S3 offers 64-byte endpoints, so reports
   are split into packets. Whether the official software accepts that is what the first test is for.
